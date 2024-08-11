@@ -18,7 +18,7 @@ print("Loading miscellanous modules...")
 import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins
 import scipy.io.wavfile as wav
 
-version = 20240810
+version = 20240811
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 advanced_opts={}
