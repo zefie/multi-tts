@@ -14,6 +14,9 @@ print("Preloading Tortoise...")
 from tortoise import api,utils
 print("Preloading Mars5...")
 from mars5.inference import Mars5TTS, InferenceConfig as config_class
+print("Preloading Parler TTS...")
+from parler_tts import ParlerTTSForConditionalGeneration
+from transformers import AutoTokenizer
 print("Loading miscellanous modules...")
 import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins, sys
 import scipy.io.wavfile as wav
@@ -32,7 +35,7 @@ for dir in paths:
 	if not os.path.exists(dir):
 		os.mkdir(dir)
 
-# Get device for Coqui
+# Get device for torch
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # save stdout to a var for restoring with unmute()
@@ -57,6 +60,7 @@ advanced_opts={}
 tts_engines = [
 	['Camb.ai Mars5','mars5'],
 	['Coqui','coqui'],
+	['Parler', 'parler'],
 	['Suno Bark','bark'],
 	['TorToiSe','tortoise']
 ]
@@ -157,18 +161,36 @@ def generate_tts(engine, model, voice, speaktxt):
 		pcm_audio = tts.tts_with_preset(speaktxt, voice_samples=reference_clips, preset=model)
 		audio = pcm_audio.detach().cpu().numpy()
 	if engine == "mars5":
-		mars5, config_class = torch.hub.load('Camb-ai/mars5-tts', 'mars5_english', trust_repo=True)
+		mars5, config_class = torch.hub.load(model, 'mars5_english', trust_repo=True)
 		wav, sr = librosa.load(voice, mono=True)
 		wav = torch.from_numpy(wav)
 		if sr != mars5.sr:
 			wav = torchaudio.functional.resample(wav, sr, mars5.sr)
-		cfg = config_class(deep_clone=advanced_opts['deep_clone'], rep_penalty_window=advanced_opts['rep_penalty_window'], top_k=advanced_opts['top_k'], top_p=advanced_opts['top_p'], temperature=advanced_opts['temperature'], freq_penalty=advanced_opts['freq_penalty'])
+		sr = mars5.sr
+		cfg = config_class(
+			deep_clone=advanced_opts['deep_clone'],
+			use_kv_cache=advanced_opts['use_kv_cache'],
+			temperature=advanced_opts['temperature'],
+			top_k=advanced_opts['top_k'],
+			top_p=advanced_opts['top_p'],
+			rep_penalty_window=advanced_opts['rep_penalty_window'],
+			freq_penalty=advanced_opts['freq_penalty'],
+			presence_penalty=advanced_opts['presence_penalty'],
+			max_prompt_dur=advanced_opts['max_prompt_dur'])
 		if len(advanced_opts['transcription']) == 0:
 			cfg.deep_clone = False
 			mars5_bool.value.remove('deep_clone')
 
 		ar_codes, output_audio = mars5.tts(speaktxt, wav, advanced_opts['transcription'], cfg=cfg)
 		audio = output_audio.detach().cpu().numpy()
+	if engine == "parler":
+		pmodel = ParlerTTSForConditionalGeneration.from_pretrained(model).to(device)
+		sr = pmodel.config.sampling_rate
+		tokenizer = AutoTokenizer.from_pretrained(model)
+		input_ids = tokenizer(advanced_opts['description'], return_tensors="pt").input_ids.to(device)
+		prompt_input_ids = tokenizer(speaktxt, return_tensors="pt").input_ids.to(device)
+		generation = pmodel.generate(input_ids=input_ids, prompt_input_ids=prompt_input_ids)
+		audio = generation.cpu().numpy().squeeze()
 
 	if not audio.any():
 		audio = ttsgen / np.max(np.abs(ttsgen))
@@ -197,16 +219,37 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 			return gr.Dropdown(choices=tortoise_qualities, value=tortoise_qualities[1][1], label="Quality")
 		if value == "mars5":
 			return gr.Dropdown(choices=['Camb-ai/mars5-tts'], value='Camb-ai/mars5-tts', label="TTS Model")
+		if value == "parler":
+			return gr.Dropdown(choices=['parler-tts/parler-tts-large-v1'], value='parler-tts/parler-tts-large-v1', label="TTS Model")
 
 	def updateAdvancedVisiblity(value):
 		if value == "tortoise":
 			updateAdvancedOpts(value, tortoise_opt_comp.value)
-			return gr.Group(visible=True), gr.Group(visible=False)
+			return {
+				tortoise_opts: gr.Group(visible=True),
+				mars5_opts: gr.Group(visible=False),
+				parler_opts: gr.Group(visible=False)
+			}
 		elif value == "mars5":
-			updateAdvancedOpts(value, transcription.value, mars5_bool.value, temperature.value, top_k.value, top_p.value, rep_penalty_window.value, freq_penalty.value, presence_penalty.value, max_prompt_dur.value)
-			return gr.Group(visible=False), gr.Group(visible=True)
+			updateAdvancedOpts(value, mars5_transcription.value, mars5_bool.value, mars5_temperature.value, mars5_top_k.value, mars5_top_p.value, mars5_rep_penalty_window.value, mars5_freq_penalty.value, mars5_presence_penalty.value, mars5_max_prompt_dur.value)
+			return {
+				tortoise_opts: gr.Group(visible=False),
+				mars5_opts: gr.Group(visible=True),
+				parler_opts: gr.Group(visible=False)
+			}
+		elif value == "parler":
+			updateAdvancedOpts(value, parler_description.value)
+			return {
+				tortoise_opts: gr.Group(visible=False),
+				mars5_opts: gr.Group(visible=False),
+				parler_opts: gr.Group(visible=True)
+			}
 		else:
-			return gr.Group(visible=False), gr.Group(visible=False)
+			return {
+				tortoise_opts: gr.Group(visible=False),
+				mars5_opts: gr.Group(visible=False),
+				parler_opts: gr.Group(visible=False)
+			}
 
 	def getVoices(value):
 		if value == "mars5":
@@ -248,6 +291,10 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 				'freq_penalty': val7,
 				'presence_penalty': val8,
 				'max_prompt_dur': val9
+			}
+		elif tts == "parler":
+			advanced_opts = {
+				'description': val1
 			}
 		else:
 			advanced_opts = {}
@@ -296,31 +343,36 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 
 	with gr.Group(visible=False) as mars5_opts:
 		mars5_bool = gr.CheckboxGroup([["Deep Clone (requires transcription)","deep_clone"],["Use KV Cache","use_kv_cache"]],label="Camb.ai Mars5 Advanced Options", value=['use_kv_cache'])
-		transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription (Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
-		temperature = gr.Slider(value=0.7, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
+		mars5_transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription (Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
+		mars5_temperature = gr.Slider(value=0.7, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
 		with gr.Row():
-			top_k = gr.Slider(value=200,minimum=0,maximum=1000, label="top_k", info="used for sampling, keeps tokens with the highest probabilities until a certain number (top_k) is reached")
-			rep_penalty_window = gr.Slider(value=80,minimum=0,maximum=200,label="rep_penalty_window",info="how far in the past to consider when penalizing repetitions. default equates to 5s")
+			mars5_top_k = gr.Slider(value=200,minimum=0,maximum=1000, label="top_k", info="used for sampling, keeps tokens with the highest probabilities until a certain number (top_k) is reached")
+			mars5_rep_penalty_window = gr.Slider(value=80,minimum=0,maximum=200,label="rep_penalty_window",info="how far in the past to consider when penalizing repetitions. default equates to 5s")
 		with gr.Row():
-			top_p = gr.Slider(value=0.2,minimum=0,maximum=1, label="top_p",info="used for sampling, keep the top tokens with cumulative probability >= top_p")
-			freq_penalty = gr.Slider(value=3,minimum=0,maximum=100,label="freq_penalty",info="increasing it would penalize the model more for reptitions")
+			mars5_top_p = gr.Slider(value=0.2,minimum=0,maximum=1, label="top_p",info="used for sampling, keep the top tokens with cumulative probability >= top_p")
+			mars5_freq_penalty = gr.Slider(value=3,minimum=0,maximum=100,label="freq_penalty",info="increasing it would penalize the model more for reptitions")
 		with gr.Row():
-			max_prompt_dur = gr.Slider(value=12,minimum=1,maximum=30,label="max_prompt_dur",info="maximum length prompt is allowed, in seconds")
-			presence_penalty = gr.Slider(value=0.4,minimum=0,maximum=1,label="presence_penalty",info="increasing it would increase token diversity")
+			mars5_max_prompt_dur = gr.Slider(value=12,minimum=1,maximum=30,label="max_prompt_dur",info="maximum length prompt is allowed, in seconds")
+			mars5_presence_penalty = gr.Slider(value=0.4,minimum=0,maximum=1,label="presence_penalty",info="increasing it would increase token diversity")
+	with gr.Group(visible=False) as parler_opts:
+		parler_description = gr.Textbox("A female speaker delivers a slightly expressive and animated speech with a moderate speed and pitch. The recording is of very high quality, with the speaker's voice sounding clear and very close up.", lines=3, placeholder="Type your description here, it should describe how you would like the voice to sound.",label="Description",info="Describe how you would like the voice to sound.")
 
 	tts_select.change(updateModels,tts_select,model_select)
-	tts_select.change(updateAdvancedVisiblity,tts_select,[tortoise_opts,mars5_opts])
-	mars5_bool.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	temperature.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	top_k.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	top_p.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	rep_penalty_window.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	freq_penalty.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
+	tts_select.change(updateAdvancedVisiblity,tts_select,[tortoise_opts,mars5_opts,parler_opts])
+	mars5_bool.change(updateAdvancedOpts,[tts_select,mars5_transcription,mars5_bool,mars5_temperature,mars5_top_k,mars5_top_p,mars5_rep_penalty_window,mars5_freq_penalty,mars5_presence_penalty,mars5_max_prompt_dur])
+	mars5_temperature.change(updateAdvancedOpts,[tts_select,mars5_transcription,mars5_bool,mars5_temperature,mars5_top_k,mars5_top_p,mars5_rep_penalty_window,mars5_freq_penalty,mars5_presence_penalty,mars5_max_prompt_dur])
+	mars5_top_k.change(updateAdvancedOpts,[tts_select,mars5_transcription,mars5_bool,mars5_temperature,mars5_top_k,mars5_top_p,mars5_rep_penalty_window,mars5_freq_penalty,mars5_presence_penalty,mars5_max_prompt_dur])
+	mars5_top_p.change(updateAdvancedOpts,[tts_select,mars5_transcription,mars5_bool,mars5_temperature,mars5_top_k,mars5_top_p,mars5_rep_penalty_window,mars5_freq_penalty,mars5_presence_penalty,mars5_max_prompt_dur])
+	mars5_rep_penalty_window.change(updateAdvancedOpts,[tts_select,mars5_transcription,mars5_bool,mars5_temperature,mars5_top_k,mars5_top_p,mars5_rep_penalty_window,mars5_freq_penalty,mars5_presence_penalty,mars5_max_prompt_dur])
+	mars5_freq_penalty.change(updateAdvancedOpts,[tts_select,mars5_transcription,mars5_bool,mars5_temperature,mars5_top_k,mars5_top_p,mars5_rep_penalty_window,mars5_freq_penalty,mars5_presence_penalty,mars5_max_prompt_dur])
+	mars5_presence_penalty.change(updateAdvancedOpts,[tts_select,mars5_transcription,mars5_bool,mars5_temperature,mars5_top_k,mars5_top_p,mars5_rep_penalty_window,mars5_freq_penalty,mars5_presence_penalty,mars5_max_prompt_dur])
+	mars5_max_prompt_dur.change(updateAdvancedOpts,[tts_select,mars5_transcription,mars5_bool,mars5_temperature,mars5_top_k,mars5_top_p,mars5_rep_penalty_window,mars5_freq_penalty,mars5_presence_penalty,mars5_max_prompt_dur])
 	tortoise_opt_comp.change(updateAdvancedOpts,[tts_select,tortoise_opt_comp])
-	voice_select.change(voiceChanged, [tts_select, voice_select], [transcription, mars5_bool])
-	model_select.change(voiceChanged, [tts_select, voice_select], [transcription, mars5_bool])
+	voice_select.change(voiceChanged, [tts_select, voice_select], [mars5_transcription, mars5_bool])
+	model_select.change(voiceChanged, [tts_select, voice_select], [mars5_transcription, mars5_bool])
 	model_select.change(updateVoicesVisibility,[tts_select,model_select],voice_select)
-	transcription.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
+	mars5_transcription.change(updateAdvancedOpts,[tts_select,mars5_transcription,mars5_bool,mars5_temperature,mars5_top_k,mars5_top_p,mars5_rep_penalty_window,mars5_freq_penalty,mars5_presence_penalty,mars5_max_prompt_dur])
+	parler_description.change(updateAdvancedOpts,[tts_select,parler_description])
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0")
