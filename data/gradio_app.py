@@ -7,6 +7,7 @@ import torchaudio, torch, librosa
 print("Preloading Coqui...")
 from TTS.api import TTS
 from TTS.utils import audio
+from TTS.utils.manage import ModelManager
 print("Preloading Bark...")
 from bark import SAMPLE_RATE, generate_audio, preload_models
 print("Preloading Tortoise...")
@@ -14,13 +15,32 @@ from tortoise import api,utils
 print("Preloading Mars5...")
 from mars5.inference import Mars5TTS, InferenceConfig as config_class
 print("Loading miscellanous modules...")
-import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins
+import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins, sys
 import scipy.io.wavfile as wav
 from string import ascii_letters, digits, punctuation
 
 version = 20240811
 
+# Get device for Coqui
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# save stdout to a var for restoring with unmute()
+stdout = sys.stdout
+stderr = sys.stderr
+
+def mute(full = False):
+	# Mutes any stdout text
+	f = open(os.devnull, 'w')
+	sys.stdout = f
+	if full:
+		# also mute stderr
+		sys.stderr = f
+
+def unmute():
+    # Unmutes stdout and stderr
+    sys.stdout = stdout
+    sys.stderr = stderr
+
 advanced_opts={}
 
 tts_engines = [
@@ -31,23 +51,24 @@ tts_engines = [
 ]
 
 
-qualities = [
+# Instead of models, offer qualities for TorToiSe
+tortoise_qualities = [
 	["High Quality", "high_quality"],
 	["Standard", "standard"],
 	["Fast", "fast"],
 	["Ultra Fast", "ultra_fast"],
 ]
 
-coqui_voice_models = [
-        "tts_models/multilingual/multi-dataset/xtts_v1.1",
-        "tts_models/multilingual/multi-dataset/xtts_v2",
-        "tts_models/multilingual/multi-dataset/your_tts",
-        "tts_models/en/jenny/jenny",
-        "tts_models/en/ek1/tacotron2",
-        "tts_models/en/ljspeech/glow-tts",
-        "tts_models/en/ljspeech/vits"
-    ]
+# Query Coqui for it's model list, mute to prevent dumping the list to console
+mute()
+manager = ModelManager()
+coqui_voice_models = manager.list_models()
+unmute()
 
+# This seems broken, and we already have Bark
+coqui_voice_models.remove('tts_models/multilingual/multi-dataset/bark')
+
+# Scan bark /home/app/bark/assets/* for .npz files. You could add your own to /home/app/bark/custom/yourvoice.npz
 bark_voice_models = [item.replace("./bark/assets/prompts/","").replace(".npz","") for item in sorted(glob.glob('./bark/assets/**/*.npz', recursive=True))]
 
 theme = gr.themes.Base(
@@ -129,6 +150,8 @@ def generate_tts(engine, model, voice, speaktxt):
 		cfg = config_class(deep_clone=advanced_opts['deep_clone'], rep_penalty_window=advanced_opts['rep_penalty_window'], top_k=advanced_opts['top_k'], top_p=advanced_opts['top_p'], temperature=advanced_opts['temperature'], freq_penalty=advanced_opts['freq_penalty'])
 		if len(advanced_opts['transcription']) == 0:
 			cfg.deep_clone = False
+			mars5_bool.value.remove('deep_clone')
+
 		ar_codes, output_audio = mars5.tts(speaktxt, wav, advanced_opts['transcription'], cfg=cfg)
 		audio = output_audio.detach().cpu().numpy()
 
@@ -138,15 +161,15 @@ def generate_tts(engine, model, voice, speaktxt):
 	return sr, audio
 
 with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
-	def updateVoicesVisibility(tts, model):
+	def updateVoicesVisibility(tts, model):	
 		if (tts == 'coqui' and (model == coqui_voice_models[0] or model == coqui_voice_models[1] or model == coqui_voice_models[2])) or tts == 'tortoise' or tts == 'mars5':
 			voices = getVoices(tts)
 			voice = voices[0][1]
 			return gr.Dropdown(choices=voices, visible=True, value=voice)
 		else:
-			for item in qualities:
+			for item in tortoise_qualities:
 				if model == item[1]:
-					return gr.Dropdown(choices=qualities, visible=True, value=model)
+					return gr.Dropdown(choices=tortoise_qualities, visible=True, value=model)
 
 			return gr.Dropdown(choices=[['','']], visible=False, value="")
 
@@ -156,7 +179,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		if value == "coqui":
 			return gr.Dropdown(choices=coqui_voice_models, value=coqui_voice_models[0], label="TTS Model")
 		if value == "tortoise":
-			return gr.Dropdown(choices=qualities, value=qualities[1][1], label="Quality")
+			return gr.Dropdown(choices=tortoise_qualities, value=tortoise_qualities[1][1], label="Quality")
 		if value == "mars5":
 			return gr.Dropdown(choices=['Camb-ai/mars5-tts'], value='Camb-ai/mars5-tts', label="TTS Model")
 
@@ -172,14 +195,17 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 
 	def getVoices(value):
 		if value == "mars5":
+			# Scan samples and srcwavs, and return each wav individually
 			wavs = [[item.replace('./sample/',''),item] for item in sorted(glob.glob('./sample/**/*.wav', recursive=True))]
 			wavs.extend([[item.replace('./srcwav/',''),item] for item in sorted(glob.glob('./srcwav/**/*.wav', recursive=True))])
 		elif value == "coqui" or value == "tortoise":
+			# Scan samples and srcwavs, but return the folder, not each wav
 			wavs = [[item.replace('./sample/',''),item] for item in sorted(glob.glob('./sample/*'))]
 			wavs.extend([[item.replace('./srcwav/',''),item] for item in sorted(glob.glob('./srcwav/*'))])
 		return wavs
 
 	def updateAdvancedOpts(tts, val1, val2 = None, val3 = None, val4 = None, val5 = None, val6 = None, val7 = None, val8 = None, val9 = None, val10 = None):
+		# wtf...
 		global advanced_opts
 		if tts == "tortoise":
 			use_deepspeed, kv_cache, half = [False, False, False]
@@ -214,6 +240,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 	def voiceChanged(tts, voice):
 		m5_bool_value = mars5_bool.value.copy()
 		out = ''
+		# Read .txt file if it exists and toggle Deep Clone accordingly
 		if tts == "mars5":
 			text = voice.replace(".wav",".txt")
 			if os.path.isfile(text):
@@ -245,7 +272,6 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		],
 		audioout,
 		title="zefie's Multi-TTS v"+str(version),
-		theme="soft",
 		allow_flagging="never",
 		submit_btn="Generate",
 		show_progress='full',
