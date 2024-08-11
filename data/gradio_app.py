@@ -21,6 +21,17 @@ from string import ascii_letters, digits, punctuation
 
 version = 20240811
 
+paths = [
+	'/root/.cache/coqui',
+	'/root/.cache/coqui/tts',
+	'/root/.cache/coqui/vocoder',
+	'/root/.cache/coqui/speaker_encoder',
+]
+
+for dir in paths:
+	if not os.path.exists(dir):
+		os.mkdir(dir)
+
 # Get device for Coqui
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -59,14 +70,18 @@ tortoise_qualities = [
 	["Ultra Fast", "ultra_fast"],
 ]
 
-# Query Coqui for it's model list, mute to prevent dumping the list to console
+# Query Coqui for it's TTS model list, mute to prevent dumping the list to console
 mute()
 manager = ModelManager()
-coqui_voice_models = manager.list_models()
+coqui_voice_models = []
+for model in manager.list_models():
+	if model[:10] == "tts_models":
+		coqui_voice_models.append(model)
 unmute()
 
-# This seems broken, and we already have Bark
+# This seems broken, and we already have Bark and Tortoise
 coqui_voice_models.remove('tts_models/multilingual/multi-dataset/bark')
+coqui_voice_models.remove('tts_models/en/multi-dataset/tortoise-v2')
 
 # Scan bark /home/app/bark/assets/* for .npz files. You could add your own to /home/app/bark/custom/yourvoice.npz
 bark_voice_models = [item.replace("./bark/assets/prompts/","").replace(".npz","") for item in sorted(glob.glob('./bark/assets/**/*.npz', recursive=True))]
@@ -161,8 +176,8 @@ def generate_tts(engine, model, voice, speaktxt):
 	return sr, audio
 
 with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
-	def updateVoicesVisibility(tts, model):	
-		if (tts == 'coqui' and (model == coqui_voice_models[0] or model == coqui_voice_models[1] or model == coqui_voice_models[2])) or tts == 'tortoise' or tts == 'mars5':
+	def updateVoicesVisibility(tts, model):
+		if (tts == 'coqui' and 'multilingual' in model) or tts == 'tortoise' or tts == 'mars5':
 			voices = getVoices(tts)
 			voice = voices[0][1]
 			return gr.Dropdown(choices=voices, visible=True, value=voice)
