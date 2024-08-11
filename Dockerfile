@@ -23,15 +23,19 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install librosa torchaudio vocos encodec safetensors regex
 
 RUN mkdir -p /home/app
-COPY ./data /home/app
 
 RUN mkdir -p /home/app/coqui && \
     ln -s /root/.cache/coqui/tts /home/app/coqui/tts && \
     ln -s /root/.cache/coqui/vocoder /home/app/coqui/vocoder && \
     ln -s /root/.cache/coqui/speaker_encoder /home/app/coqui/speaker_encoder
 
+COPY ./data/tortoise-tts /home/app/tortoise-tts
+COPY ./data/parler-tts /home/app/parler-tts
+
 RUN --mount=type=cache,target=/root/.cache/pip cd /home/app && \
 	pip install ./tortoise-tts ./parler-tts
+
+COPY ./data /home/app
 
 EXPOSE 7860
 WORKDIR "/home/app"
