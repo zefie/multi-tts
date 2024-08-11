@@ -2,6 +2,8 @@ print("Loading Numpy")
 import numpy as np
 print("Loading GRadio")
 import gradio as gr
+print("Loading torch, torchaudio, and librosa...")
+import torchaudio, torch, librosa
 print("Preloading Coqui...")
 from TTS.api import TTS
 from TTS.utils import audio
@@ -9,14 +11,12 @@ print("Preloading Bark...")
 from bark import SAMPLE_RATE, generate_audio, preload_models
 print("Preloading Tortoise...")
 from tortoise import api,utils
-from string import ascii_letters, digits, punctuation
 print("Preloading Mars5...")
 from mars5.inference import Mars5TTS, InferenceConfig as config_class
-print("Loading torch, torchaudio, and librosa...")
-import torchaudio, torch, librosa
 print("Loading miscellanous modules...")
 import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins
 import scipy.io.wavfile as wav
+from string import ascii_letters, digits, punctuation
 
 version = 20240811
 
@@ -165,7 +165,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 			updateAdvancedOpts(value, tortoise_opt_comp.value)
 			return gr.Group(visible=True), gr.Group(visible=False)
 		elif value == "mars5":
-			updateAdvancedOpts(value, transcription.value, deep_clone.value, use_kv_cache.value, temperature.value, top_k.value, top_p.value, rep_penalty_window.value, freq_penalty.value, presence_penalty.value, max_prompt_dur.value)
+			updateAdvancedOpts(value, transcription.value, mars5_bool.value, temperature.value, top_k.value, top_p.value, rep_penalty_window.value, freq_penalty.value, presence_penalty.value, max_prompt_dur.value)
 			return gr.Group(visible=False), gr.Group(visible=True)
 		else:
 			return gr.Group(visible=False), gr.Group(visible=False)
@@ -198,35 +198,42 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		elif tts == "mars5":
 			advanced_opts = {
 				'transcription': val1,
-				'deep_clone': val2,
-				'use_kv_cache': val3,
-				'temperature': val4,
-				'top_k': val5,
-				'top_p': val6,
-				'rep_penalty_window': val7,
-				'freq_penalty': val8,
-				'presence_penalty': val9,
-				'max_prompt_dur': val10
+				'deep_clone': ('deep_clone' in val2),
+				'use_kv_cache': ('use_kv_cache' in val2),
+				'temperature': val3,
+				'top_k': val4,
+				'top_p': val5,
+				'rep_penalty_window': val6,
+				'freq_penalty': val7,
+				'presence_penalty': val8,
+				'max_prompt_dur': val9
 			}
 		else:
 			advanced_opts = {}
 
 	def voiceChanged(tts, voice):
+		m5_bool_value = mars5_bool.value.copy()
+		out = ''
 		if tts == "mars5":
 			text = voice.replace(".wav",".txt")
 			if os.path.isfile(text):
 				f = open(text,"r");
 				out = f.read();
 				f.close()
-				return gr.Textbox(value=out), gr.Checkbox(value=True)
-		return gr.Textbox(value=''), gr.Checkbox(value=False)
+				if 'deep_clone' not in mars5_bool.value:
+					m5_bool_value.append('deep_clone')
+		else:
+			if 'deep_clone' in mars5_bool.value:
+				m5_bool_value.remove('deep_clone')
+
+		return gr.Textbox(value=out), gr.CheckboxGroup(value=m5_bool_value)
 
 	voices = getVoices("coqui")
 	tts_select = gr.Radio(tts_engines, type="value", value="coqui", label="TTS Engine")
 	voice = voices[0][1]
 	voice_select = gr.Dropdown(choices=voices, value=voice, type="value", visible=True, label="Voice Cloning", info="Place your custom voices in /home/app/srcwav/Desired Name/File1.wav, etc")
 	model_select = gr.Dropdown(coqui_voice_models, type="value", value=coqui_voice_models[0], label="TTS Model")
-	audioout = gr.Audio(show_download_button=True, waveform_options={'show_controls': True})
+	audioout = gr.Audio(show_download_button=True, label="Generated Audio")
 	speak_text = gr.Textbox(value="Welcome to the multi text to speech generator", label="Text to speak", lines=3)
 	demo2 = gr.Interface(
 		generate_tts,
@@ -244,32 +251,34 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		show_progress='full',
 	)
 	with gr.Group(visible=False) as tortoise_opts:
-		tortoise_opt_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],["fp16 (half)","half"]], label="Tortoise options", value=['use_deepspeed','kv_cache'])
+		tortoise_opt_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],["fp16 (half)","half"]], label="Tortoise Advanced Options", value=['use_deepspeed','kv_cache'])
 
 	with gr.Group(visible=False) as mars5_opts:
-		transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription (Optional, but recommended)")
-		deep_clone = gr.Checkbox(value=False, label="Deep Clone (requires transcription)")
-		use_kv_cache = gr.Checkbox(value=True, label="Use KV Cache")
+		mars5_bool = gr.CheckboxGroup([["Deep Clone (requires transcription)","deep_clone"],["Use KV Cache","use_kv_cache"]],label="Camb.ai Mars5 Advanced Options", value=['use_kv_cache'])
+		transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription (Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
 		temperature = gr.Slider(value=0.7, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
-		top_k = gr.Slider(value=200,minimum=0,maximum=1000, label="top_k", info="used for sampling, keeps tokens with the highest probabilities until a certain number (top_k) is reached")
-		top_p = gr.Slider(value=0.2,minimum=0,maximum=1, label="top_p",info="used for sampling, keep the top tokens with cumulative probability >= top_p")
-		rep_penalty_window = gr.Slider(value=80,minimum=0,maximum=200,label="rep_penalty_window",info="how far in the past to consider when penalizing repetitions. default equates to 5s")
-		freq_penalty = gr.Slider(value=3,minimum=0,maximum=100,label="freq_penalty",info="increasing it would penalize the model more for reptitions")
-		presence_penalty = gr.Slider(value=0.4,minimum=0,maximum=1,label="presence_penalty",info="increasing it would increase token diversity")
-		max_prompt_dur = gr.Slider(value=12,minimum=1,maximum=30,label="max_prompt_dur",info="maximum length prompt is allowed, in seconds")
+		with gr.Row():
+			top_k = gr.Slider(value=200,minimum=0,maximum=1000, label="top_k", info="used for sampling, keeps tokens with the highest probabilities until a certain number (top_k) is reached")
+			rep_penalty_window = gr.Slider(value=80,minimum=0,maximum=200,label="rep_penalty_window",info="how far in the past to consider when penalizing repetitions. default equates to 5s")
+		with gr.Row():
+			top_p = gr.Slider(value=0.2,minimum=0,maximum=1, label="top_p",info="used for sampling, keep the top tokens with cumulative probability >= top_p")
+			freq_penalty = gr.Slider(value=3,minimum=0,maximum=100,label="freq_penalty",info="increasing it would penalize the model more for reptitions")
+		with gr.Row():
+			max_prompt_dur = gr.Slider(value=12,minimum=1,maximum=30,label="max_prompt_dur",info="maximum length prompt is allowed, in seconds")
+			presence_penalty = gr.Slider(value=0.4,minimum=0,maximum=1,label="presence_penalty",info="increasing it would increase token diversity")
 
 	tts_select.change(updateModels,tts_select,model_select)
 	tts_select.change(updateAdvancedVisiblity,tts_select,[tortoise_opts,mars5_opts])
-	transcription.blur(updateAdvancedOpts,[tts_select,transcription,deep_clone,use_kv_cache,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	deep_clone.change(updateAdvancedOpts,[tts_select,transcription,deep_clone,use_kv_cache,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	temperature.change(updateAdvancedOpts,[tts_select,transcription,deep_clone,use_kv_cache,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	top_k.change(updateAdvancedOpts,[tts_select,transcription,deep_clone,use_kv_cache,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	top_p.change(updateAdvancedOpts,[tts_select,transcription,deep_clone,use_kv_cache,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	rep_penalty_window.change(updateAdvancedOpts,[tts_select,transcription,deep_clone,use_kv_cache,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
-	freq_penalty.change(updateAdvancedOpts,[tts_select,transcription,deep_clone,use_kv_cache,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
+	transcription.blur(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
+	mars5_bool.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
+	temperature.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
+	top_k.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
+	top_p.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
+	rep_penalty_window.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
+	freq_penalty.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
 	tortoise_opt_comp.change(updateAdvancedOpts,[tts_select,tortoise_opt_comp])
-	voice_select.change(voiceChanged, [tts_select, voice_select], [transcription, deep_clone])
-	model_select.change(voiceChanged, [tts_select, voice_select], [transcription, deep_clone])
+	voice_select.change(voiceChanged, [tts_select, voice_select], [transcription, mars5_bool])
+	model_select.change(voiceChanged, [tts_select, voice_select], [transcription, mars5_bool])
 	model_select.change(updateVoicesVisibility,[tts_select,model_select],voice_select)
 
 if __name__ == "__main__":
