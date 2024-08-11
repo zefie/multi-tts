@@ -24,10 +24,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 RUN mkdir -p /home/app
 COPY ./data /home/app
-RUN mkdir -p /home/app/coqui /root/.cache/coqui/tts /root/.cache/coqui/vocoder /root/.cache/coqui/speaker_encoder
+RUN mkdir -p /home/app/coqui /root/.cache/coqui/tts /root/.cache/coqui/vocoder /root/.cache/coqui/speaker_encoder && \
     ln -s /root/.cache/coqui/tts /home/app/coqui/tts && \
     ln -s /root/.cache/coqui/vocoder /home/app/coqui/vocoder && \
-    ln -s /root/.cache/coqui/speaker_encoder /home/app/coqui/speaker_encoder && \
+    ln -s /root/.cache/coqui/speaker_encoder /home/app/coqui/speaker_encoder
 
 
 RUN --mount=type=cache,target=/root/.cache/pip cd /home/app && \
