@@ -295,7 +295,6 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 
 	tts_select.change(updateModels,tts_select,model_select)
 	tts_select.change(updateAdvancedVisiblity,tts_select,[tortoise_opts,mars5_opts])
-	transcription.blur(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
 	mars5_bool.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
 	temperature.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
 	top_k.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
@@ -306,6 +305,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 	voice_select.change(voiceChanged, [tts_select, voice_select], [transcription, mars5_bool])
 	model_select.change(voiceChanged, [tts_select, voice_select], [transcription, mars5_bool])
 	model_select.change(updateVoicesVisibility,[tts_select,model_select],voice_select)
+	transcription.change(updateAdvancedOpts,[tts_select,transcription,mars5_bool,temperature,top_k,top_p,rep_penalty_window,freq_penalty,presence_penalty,max_prompt_dur])
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0")
