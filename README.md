@@ -39,6 +39,6 @@ Play around with your source files until you get the voice you desire. The scrip
 `git clone https://github.com/zefie/multi-tts.git --depth=1 && cd multi-tts && docker build -t multi-tts:latest .`
 
 ## Screenshots
-![Coqui](https://github.com/zefie/multi-tts/blob/main/screenshots/20240811_coqui.png?raw=true)
-![TorToiSe](https://github.com/zefie/multi-tts/blob/main/screenshots/20240811_tortoise.png?raw=true)
-![Camb.ai Mars5](https://github.com/zefie/multi-tts/blob/main/screenshots/20240811_mars5.png?raw=true)
+![Coqui](https://github.com/zefie/multi-tts/blob/main/screenshots/20240812_coqui.png?raw=true)
+![Parler](https://github.com/zefie/multi-tts/blob/main/screenshots/20240812_parler.png?raw=true)
+![Camb.ai Mars5](https://github.com/zefie/multi-tts/blob/main/screenshots/20240812_mars5.png?raw=true)
