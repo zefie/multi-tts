@@ -23,6 +23,14 @@ version = 20240810
 device = "cuda" if torch.cuda.is_available() else "cpu"
 advanced_opts={}
 
+tts_engines = [
+	['Camb.ai Mars5','mars5'],
+	['Coqui','coqui'],
+	['Suno Bark','bark'],
+	['TorToiSe','tortoise']
+]
+
+
 qualities = [
 	["High Quality", "high_quality"],
 	["Standard", "standard"],
@@ -214,7 +222,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		return gr.Textbox(value=''), gr.Checkbox(value=False)
 
 	voices = getVoices("coqui")
-	tts_select = gr.Radio([['Coqui','coqui'],['Bark','bark'],['Tortoise','tortoise'],['Camb.ai Mars5','mars5']], type="value", value="coqui", label="TTS Engine")
+	tts_select = gr.Radio(tts_engines, type="value", value="coqui", label="TTS Engine")
 	voice = voices[0][1]
 	voice_select = gr.Dropdown(choices=voices, value=voice, type="value", visible=True, label="Voice Cloning", info="Place your custom voices in /home/app/srcwav/Desired Name/File1.wav, etc")
 	model_select = gr.Dropdown(coqui_voice_models, type="value", value=coqui_voice_models[0], label="TTS Model")
