@@ -433,13 +433,13 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 	)
 	with gr.Group(visible=False) as tortoise_opts:
 		with gr.Row():
-			tortoise_opts_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],["fp16 (half)","half"],['Conditioning-Free Diffusion','cond_free']], label="Tortoise Advanced Options", value=['use_deepspeed','kv_cache','cond_free'])
+			tortoise_opts_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],['Conditioning-Free Diffusion','cond_free'],["fp16 (half)","half"]], label="Tortoise Advanced Options", value=['use_deepspeed','kv_cache','cond_free'])
 		with gr.Row():
 			tortoise_temperature = gr.Slider(value=0.8, minimum=0, maximum=3, label="Temperature", info="The softmax temperature of the autoregressive model.")
-			tortoise_diffusion_temperature = gr.Slider(value=1, minimum=0, maximum=3, label="Difussion Temperature", info="Controls the variance of the noise fed into the diffusion model. [0,1]. Values at 0  are the \"mean\" prediction of the diffusion network and will sound bland and smeared")
+			tortoise_diffusion_temperature = gr.Slider(value=1, minimum=0, maximum=1, label="Difussion Temperature", info="Controls the variance of the noise fed into the diffusion model. Values at 0 are the \"mean\" prediction of the diffusion network and will sound bland and smeared")
 		with gr.Row():
 			tortoise_num_autoregressive_samples = gr.Slider(value=256, minimum=16, maximum=2048, label="# of Autoregressive Samples", info="Number of samples taken from the autoregressive model, all of which are filtered using CLVP. As Tortoise is a probabilistic model, more samples means a higher probability of creating something \"great\".")
-			tortoise_diffusion_iterations = gr.Slider(value=200, minimum=30, maximum=4000, label="Diffusion Iterations", info="Number of diffusion steps to perform. [0,4000]. More steps means the network has more chances to iteratively refine the output, which should theoretically mean a higher quality output. Generally a value above 250 is not noticeably better, however.")
+			tortoise_diffusion_iterations = gr.Slider(value=200, minimum=30, maximum=4000, label="Diffusion Iterations", info="Number of diffusion steps to perform. More steps means the network has more chances to iteratively refine the output, which should theoretically mean a higher quality output. Generally a value above 250 is not noticeably better, however.")
 	with gr.Group(visible=False) as mars5_opts:
 		mars5_bool = gr.CheckboxGroup([["Deep Clone (requires transcription)","deep_clone"],["Use KV Cache","use_kv_cache"]],label="Camb.ai Mars5 Advanced Options", value=['use_kv_cache'])
 		mars5_transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription (Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
