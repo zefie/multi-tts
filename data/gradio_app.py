@@ -164,8 +164,8 @@ def generate_tts(engine, model, voice, speaktxt):
 		if args.skip_preload:
 			print("Loading TorToiSe...")
 			from tortoise import api,utils
-		sr = 22050
-		reference_clips = [utils.audio.load_audio(p, sr) for p in glob.glob(voice + "/*.wav")]
+		sr = 24000
+		reference_clips = [utils.audio.load_audio(p, 22050) for p in glob.glob(voice + "/*.wav")]
 		use_deepspeed = False
 		kv_cache = False
 		half = False
@@ -176,7 +176,7 @@ def generate_tts(engine, model, voice, speaktxt):
 		if 'half' in advanced_opts:
 			half = bool(advanced_opts['half'])
 		print("Generating...")
-		tts = api.TextToSpeech(use_deepspeed=use_deepspeed, kv_cache=kv_cache, half=half)
+		tts = api.TextToSpeech(use_deepspeed=use_deepspeed, kv_cache=kv_cache, half=half, device=device)
 		pcm_audio = tts.tts_with_preset(speaktxt, voice_samples=reference_clips, preset=model)
 		print("Processing audio...")
 		audio = pcm_audio.detach().cpu().numpy()
