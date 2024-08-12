@@ -73,13 +73,14 @@ tts_engines = [
 ]
 
 
-# Instead of models, offer qualities for TorToiSe
-tortoise_qualities = [
-	["High Quality", "high_quality"],
-	["Standard", "standard"],
-	["Fast", "fast"],
-	["Ultra Fast", "ultra_fast"],
-]
+# Instead of models, offer presets for TorToiSe
+tortoise_presets = {
+	'ultra_fast': {'label': 'Ultra Fast', 'num_autoregressive_samples': 16, 'diffusion_iterations': 30, 'cond_free': False},
+	'fast': {'label': 'Fast', 'num_autoregressive_samples': 96, 'diffusion_iterations': 80},
+	'standard': {'label': 'Standard', 'num_autoregressive_samples': 256, 'diffusion_iterations': 200},
+	'high_quality': {'label': 'High Quality', 'num_autoregressive_samples': 256, 'diffusion_iterations': 400},
+	'zefie_hq': {'label': "zefie's High Quality", 'num_autoregressive_samples': 512, 'diffusion_iterations': 400},
+}
 
 # Query Coqui for it's TTS model list, mute to prevent dumping the list to console
 mute()
@@ -120,6 +121,7 @@ def strip_unicode(string):
 
 def generate_tts(engine, model, voice, speaktxt):
 	global advanced_opts
+	print("Advanced Options:", advanced_opts)
 	sr = 22050
 	bit_depth = -16
 	channels = 1
@@ -177,7 +179,7 @@ def generate_tts(engine, model, voice, speaktxt):
 			half = bool(advanced_opts['half'])
 		print("Generating...")
 		tts = api.TextToSpeech(use_deepspeed=use_deepspeed, kv_cache=kv_cache, half=half, device=device)
-		pcm_audio = tts.tts_with_preset(speaktxt, voice_samples=reference_clips, preset=model)
+		pcm_audio = tts.tts(speaktxt, voice_samples=reference_clips, temperature=advanced_opts['temperature'], num_autoregressive_samples=advanced_opts['num_autoregressive_samples'], diffusion_iterations=advanced_opts['diffusion_iterations'], cond_free=advanced_opts['cond_free'], diffusion_temperature=advanced_opts['diffusion_temperature'])
 		print("Processing audio...")
 		audio = pcm_audio.detach().cpu().numpy()
 	if engine == "mars5":
@@ -246,12 +248,16 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 			voices = getVoices(tts)
 			voice = voices[0][1]
 			return gr.Dropdown(choices=voices, visible=True, value=voice)
-		else:
-			for item in tortoise_qualities:
-				if model == item[1]:
-					return gr.Dropdown(choices=tortoise_qualities, visible=True, value=model)
-
-			return gr.Dropdown(choices=[['','']], visible=False, value="")
+#		else:
+#			tortoise_pr = []
+#			for item in tortoise_presets.keys():
+#				if model == item:
+#					value = model
+#				tortoise_pr.append([tortoise_presets[item]['label'],item])
+#
+#			return gr.Dropdown(choices=tortoise_pr, visible=True, value=model)
+#
+		return gr.Dropdown(choices=[['','']], visible=False, value="")
 
 	def updateModels(value):
 		if value == "bark":
@@ -259,7 +265,8 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		if value == "coqui":
 			return gr.Dropdown(choices=coqui_voice_models, value=coqui_voice_models[0], label="TTS Model")
 		if value == "tortoise":
-			return gr.Dropdown(choices=tortoise_qualities, value=tortoise_qualities[1][1], label="Quality")
+			tortoise_pr = [[tortoise_presets[item]['label'],item] for item in tortoise_presets.keys()]
+			return gr.Dropdown(choices=tortoise_pr, value='standard', label="Preset")
 		if value == "mars5":
 			return gr.Dropdown(choices=['Camb-ai/mars5-tts'], value='Camb-ai/mars5-tts', label="TTS Model")
 		if value == "parler":
@@ -267,7 +274,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 
 	def updateAdvancedVisiblity(value):
 		if value == "tortoise":
-			updateAdvancedOpts(value, tortoise_opt_comp.value)
+			updateAdvancedOpts(value, tortoise_opts_comp.value, tortoise_temperature.value, tortoise_diffusion_temperature.value, tortoise_num_autoregressive_samples.value, tortoise_diffusion_iterations.value)
 			return {
 				tortoise_opts: gr.Group(visible=True),
 				mars5_opts: gr.Group(visible=False),
@@ -310,18 +317,25 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		# wtf...
 		global advanced_opts
 		if tts == "tortoise":
-			use_deepspeed, kv_cache, half = [False, False, False]
+			use_deepspeed, kv_cache, half, cond_free = [False, False, False, False]
 			if 'use_deepspeed' in args[0]:
 				use_deepspeed = True
 			if 'kv_cache' in args[0]:
 				kv_cache = True
 			if 'half' in args[0]:
 				half = True
+			if 'cond_free' in args[0]:
+				cond_free = True
 
 			advanced_opts = {
 				'use_deepspeed': use_deepspeed,
 				'kv_cache': kv_cache,
-				'half': half
+				'half': half,
+				'cond_free': cond_free,
+				'temperature': args[1],
+				'diffusion_temperature': args[2],
+				'num_autoregressive_samples': args[3],
+				'diffusion_iterations': args[4]
 			}
 		elif tts == "mars5":
 			advanced_opts = {
@@ -354,9 +368,9 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 			advanced_opts = {}
 
 	def voiceChanged(tts, voice):
+		# Read .txt file if it exists and toggle Deep Clone accordingly
 		m5_bool_value = mars5_bool.value.copy()
 		out = ''
-		# Read .txt file if it exists and toggle Deep Clone accordingly
 		if tts == "mars5":
 			text = voice.replace(".wav",".txt")
 			if os.path.isfile(text):
@@ -365,11 +379,36 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 				f.close()
 				if 'deep_clone' not in mars5_bool.value:
 					m5_bool_value.append('deep_clone')
-		else:
-			if 'deep_clone' in mars5_bool.value:
-				m5_bool_value.remove('deep_clone')
+			else:
+				if 'deep_clone' in mars5_bool.value:
+					m5_bool_value.remove('deep_clone')
+		return {
+			mars5_transcription: gr.Textbox(value=out),
+			mars5_bool: gr.CheckboxGroup(value=m5_bool_value),
+		}
 
-		return gr.Textbox(value=out), gr.CheckboxGroup(value=m5_bool_value)
+	def presetChanged(tts, model):
+		tortoise_opts_value = tortoise_opts_comp.value.copy()
+		if tts == "tortoise":
+			if 'cond_free' not in tortoise_presets[model]:
+				# True
+				if 'cond_free' not in tortoise_opts_value:
+					tortoise_opts_value.append('cond_free')
+			else:
+				# False
+				if 'cond_free' in tortoise_opts_value:
+					tortoise_opts_value.remove('cond_free')
+
+			return {
+				tortoise_num_autoregressive_samples: gr.Slider(value=tortoise_presets[model]['num_autoregressive_samples']),
+				tortoise_diffusion_iterations: gr.Slider(value=tortoise_presets[model]['diffusion_iterations']),
+				tortoise_opts_comp: gr.CheckboxGroup(value=tortoise_opts_value),
+			}
+		return {
+			tortoise_num_autoregressive_samples: gr.Slider(),
+			tortoise_diffusion_iterations: gr.Slider(),
+			tortoise_opts_comp: gr.CheckboxGroup(),
+		}
 
 	voices = getVoices("coqui")
 	tts_select = gr.Radio(tts_engines, type="value", value="coqui", label="TTS Engine")
@@ -393,8 +432,14 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		show_progress='full',
 	)
 	with gr.Group(visible=False) as tortoise_opts:
-		tortoise_opt_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],["fp16 (half)","half"]], label="Tortoise Advanced Options", value=['use_deepspeed','kv_cache'])
-
+		with gr.Row():
+			tortoise_opts_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],["fp16 (half)","half"],['Conditioning-Free Diffusion','cond_free']], label="Tortoise Advanced Options", value=['use_deepspeed','kv_cache','cond_free'])
+		with gr.Row():
+			tortoise_temperature = gr.Slider(value=0.8, minimum=0, maximum=3, label="Temperature", info="The softmax temperature of the autoregressive model.")
+			tortoise_diffusion_temperature = gr.Slider(value=1, minimum=0, maximum=3, label="Difussion Temperature", info="Controls the variance of the noise fed into the diffusion model. [0,1]. Values at 0  are the \"mean\" prediction of the diffusion network and will sound bland and smeared")
+		with gr.Row():
+			tortoise_num_autoregressive_samples = gr.Slider(value=256, minimum=16, maximum=2048, label="# of Autoregressive Samples", info="Number of samples taken from the autoregressive model, all of which are filtered using CLVP. As Tortoise is a probabilistic model, more samples means a higher probability of creating something \"great\".")
+			tortoise_diffusion_iterations = gr.Slider(value=200, minimum=30, maximum=4000, label="Diffusion Iterations", info="Number of diffusion steps to perform. [0,4000]. More steps means the network has more chances to iteratively refine the output, which should theoretically mean a higher quality output. Generally a value above 250 is not noticeably better, however.")
 	with gr.Group(visible=False) as mars5_opts:
 		mars5_bool = gr.CheckboxGroup([["Deep Clone (requires transcription)","deep_clone"],["Use KV Cache","use_kv_cache"]],label="Camb.ai Mars5 Advanced Options", value=['use_kv_cache'])
 		mars5_transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription (Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
@@ -416,12 +461,14 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 			parler_options = gr.CheckboxGroup([['Compile Mode','compile_mode'],['Include Attn Mask','inc_attn_mask']])
 			parler_attn_implementation = gr.Dropdown(['eager','sdpa'],value="eager",label="Attention Implementation")
 
+
 	groups_group = {'fn': updateAdvancedVisiblity, 'inputs': tts_select, "outputs": [tortoise_opts, mars5_opts, parler_opts]}
 	voices_group = {'fn': updateVoicesVisibility, 'inputs': [tts_select, model_select], 'outputs': voice_select}
-	tortoise_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opt_comp]}
+	tortoise_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations]}
 	mars5_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur]}
 	parler_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, parler_description, parler_attn_implementation, parler_options, parler_temperature]}
 	voiceChanged_group = {'fn': voiceChanged, 'inputs': [tts_select, voice_select], 'outputs': [mars5_transcription, mars5_bool]}
+	presetChanged_group = {'fn': presetChanged, 'inputs': [tts_select, model_select], 'outputs': [tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, tortoise_opts_comp]}
 
 	tts_select.change(updateModels,tts_select,model_select)
 	tts_select.change(**groups_group)
@@ -434,13 +481,18 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 	mars5_presence_penalty.change(**mars5_group)
 	mars5_max_prompt_dur.change(**mars5_group)
 	mars5_transcription.change(**mars5_group)
-	tortoise_opt_comp.change(**tortoise_group)
+	tortoise_opts_comp.change(**tortoise_group)
+	tortoise_temperature.change(**tortoise_group)
+	tortoise_diffusion_temperature.change(**tortoise_group)
+	tortoise_num_autoregressive_samples.change(**tortoise_group)
+	tortoise_diffusion_iterations.change(**tortoise_group)
 	parler_description.change(**parler_group)
 	parler_attn_implementation.change(**parler_group)
 	parler_options.change(**parler_group)
 	parler_temperature.change(**parler_group)
 	voice_select.change(**voiceChanged_group)
 	model_select.change(**voiceChanged_group)
+	model_select.change(**presetChanged_group)
 	model_select.change(**voices_group)
 
 
