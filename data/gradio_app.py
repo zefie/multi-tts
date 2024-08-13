@@ -156,10 +156,10 @@ def generate_tts(engine, model, voice, speaktxt):
 			# no speaker
 			ttsgen = tts.tts(text=speaktxt, sample_rate=sr, channels=channels, bit_depth=bit_depth)
 	if engine == "bark":
-		sr = SAMPLE_RATE;
 		if args.skip_preload:
 			print("Loading Bark...")
 			from bark import SAMPLE_RATE, generate_audio, preload_models
+		sr = SAMPLE_RATE;
 		print("Generating...")
 		ttsgen = generate_audio(speaktxt, history_prompt="bark/assets/prompts/"+model+".npz")
 	if engine == "tortoise":
