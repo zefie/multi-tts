@@ -39,4 +39,4 @@ COPY ./data /home/app
 
 EXPOSE 7860
 WORKDIR "/home/app"
-CMD ["python", "gradio_app.py"]
+CMD ["python", "gradio_app.py", "-s"]
