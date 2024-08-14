@@ -10,26 +10,9 @@ import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time
 import scipy.io.wavfile as wav
 from string import ascii_letters, digits, punctuation
 
-parser = argparse.ArgumentParser()
-parser.add_argument('-s',  '--skip-preload',help='Does not preload TTS modules, instead loads them as needed.', action='store_true')
-args = parser.parse_args()
+loaded_tts = {}
 
-if not args.skip_preload:
-	print("Preloading Coqui...")
-	from TTS.api import TTS
-	from TTS.utils import audio
-	from TTS.utils.manage import ModelManager
-	print("Preloading Suno Bark...")
-	from bark import SAMPLE_RATE, generate_audio, preload_models
-	print("Preloading TorToiSe...")
-	from tortoise import api,utils
-	print("Preloading Camb.ai Mars5...")
-	from mars5.inference import Mars5TTS, InferenceConfig as config_class
-	print("Preloading Parler...")
-	from parler_tts import ParlerTTSForConditionalGeneration
-	from transformers import AutoTokenizer
-
-version = 20240812
+version = 20240813
 
 paths = [
 	'/root/.cache/coqui',
@@ -119,81 +102,101 @@ def strip_unicode(string):
     ascii_chars = set(ascii_letters + digits + punctuation) - {' ', '\t', '\n'}
     return ''.join([c for c in string if (ord(c) <= 127 and ord(c) not in (0xc0, 0xc1)) or c in ascii_chars])
 
-def generate_tts(engine, model, voice, speaktxt):
-	global advanced_opts
+def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
+	global advanced_opts, loaded_tts
 	print("Advanced Options:", advanced_opts)
 	sr = 22050
 	bit_depth = -16
 	channels = 1
 	audio = np.array([False])
+	progress(0, "Preparing...")
 	if engine == "coqui":
 		sr = getSampleRate(model)
 		speaktxt = strip_unicode(speaktxt)
 		os.environ["TTS_HOME"] = "./coqui/"
-		if args.skip_preload:
-			print("Loading Coqui...")
-			from TTS.api import TTS
-		tts = TTS().to(device)
-		print("Loading model...")
-		if ',' in model:
-			TTS.tts.configs.xtts_config.X
-			tts_path = "./coqui/tts/"+model.split(",")[0]+"/"+model.split(",")[1]
-			config_path = "./coqui/tts/"+model.split(",")[0]+"/config.json"
-			TTS.load_tts_model_by_path(tts, tts_path, config_path)
-		else:
-			TTS.load_tts_model_by_name(tts, model)
-		print("Generating...")
-		if tts.is_multi_speaker or tts.is_multi_lingual:
+		if engine not in loaded_tts:
+			progress(0.15, "Loading Coqui...")
+			from TTS.api import TTS as tts_api
+			loaded_tts[engine] = {}
+			loaded_tts[engine]['api'] = tts_api
+			loaded_tts[engine]['engine'] = loaded_tts[engine]['api']().to(device)
+			loaded_tts[engine]['model'] = None
+			del tts_api
+		progress(0.25,"Loaded Coqui")
+
+		if loaded_tts[engine]['model'] != model:
+			progress(0.30,"Loading model...")
+			if ',' in model:
+				loaded_tts[engine]['api'].tts.configs.xtts_config.X
+				tts_path = "./coqui/tts/"+model.split(",")[0]+"/"+model.split(",")[1]
+				config_path = "./coqui/tts/"+model.split(",")[0]+"/config.json"
+				loaded_tts[engine]['api'].load_tts_model_by_path(loaded_tts[engine]['engine'], tts_path, config_path)
+			else:
+				loaded_tts[engine]['api'].load_tts_model_by_name(loaded_tts[engine]['engine'], model)
+			loaded_tts[engine]['model'] = model
+
+		progress(0.50,"Generating...")
+		if loaded_tts[engine]['engine'].is_multi_speaker or loaded_tts[engine]['engine'].is_multi_lingual:
 			wavs = glob.glob(voice + "/*.wav")
 			if len(wavs) > 0:
-				if tts.is_multi_lingual:
+				if loaded_tts[engine]['engine'].is_multi_lingual:
 					# multilingual, so send language and speaker
-					ttsgen = tts.tts(text=speaktxt, speaker_wav=wavs, language="en")
+					ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs, language="en")
 				else:
 					# not multilingual, just send speaker
-					ttsgen = tts.tts(text=speaktxt, speaker_wav=wavs)
+					ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs)
 		else:
 			# no speaker
-			ttsgen = tts.tts(text=speaktxt, sample_rate=sr, channels=channels, bit_depth=bit_depth)
+			ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, sample_rate=sr, channels=channels, bit_depth=bit_depth)
 	if engine == "bark":
-		if args.skip_preload:
-			print("Loading Bark...")
-			from bark import SAMPLE_RATE, generate_audio, preload_models
-		sr = SAMPLE_RATE;
-		print("Generating...")
-		ttsgen = generate_audio(speaktxt, history_prompt="bark/assets/prompts/"+model+".npz")
+		if engine not in loaded_tts:
+			progress(0.15, "Loading Bark...")
+			import bark
+			loaded_tts[engine] = bark
+		progress(0.25, "Loaded Bark")
+		sr = loaded_tts[engine].SAMPLE_RATE;
+		progress(0.50, "Generating...")
+		ttsgen = loaded_tts[engine].generate_audio(speaktxt, history_prompt="bark/assets/prompts/"+model+".npz")
 	if engine == "tortoise":
-		if args.skip_preload:
-			print("Loading TorToiSe...")
-			from tortoise import api,utils
+		if engine not in loaded_tts:
+			progress(0.15,"Loading TorToiSe...")
+			from tortoise import utils, api
+			loaded_tts[engine] = {}
+			loaded_tts[engine]['api'] = api
+			loaded_tts[engine]['utils'] = utils
+			del api, utils
+		progress(0.25, "Loaded TorToiSe")
+		loaded_tts[engine]['model'] = None
 		sr = 24000
-		reference_clips = [utils.audio.load_audio(p, 22050) for p in glob.glob(voice + "/*.wav")]
-		use_deepspeed = False
-		kv_cache = False
-		half = False
-		if 'use_deepspeed' in advanced_opts:
-			use_deepspeed = bool(advanced_opts['use_deepspeed'])
-		if 'kv_cache' in advanced_opts:
-			kv_cache = bool(advanced_opts['kv_cache'])
-		if 'half' in advanced_opts:
-			half = bool(advanced_opts['half'])
-		print("Generating...")
-		tts = api.TextToSpeech(use_deepspeed=use_deepspeed, kv_cache=kv_cache, half=half, device=device)
+		reference_clips = [loaded_tts[engine]['utils'].audio.load_audio(p, 22050) for p in glob.glob(voice + "/*.wav")]
+		progress(0.50, "Generating...")
+		tts = loaded_tts[engine]['api'].TextToSpeech(use_deepspeed=advanced_opts['use_deepspeed'], kv_cache=advanced_opts['kv_cache'], half=advanced_opts['half'], device=device)
 		pcm_audio = tts.tts(speaktxt, voice_samples=reference_clips, temperature=advanced_opts['temperature'], num_autoregressive_samples=advanced_opts['num_autoregressive_samples'], diffusion_iterations=advanced_opts['diffusion_iterations'], cond_free=advanced_opts['cond_free'], diffusion_temperature=advanced_opts['diffusion_temperature'])
-		print("Processing audio...")
+		progress(0.75, "Processing audio...")
 		audio = pcm_audio.detach().cpu().numpy()
 	if engine == "mars5":
-		if args.skip_preload:
-			print("Loading Camb.ai Mars5...")
+		if engine not in loaded_tts:
+			progress(0.15, "Loading Camb.ai Mars5...")
 			from mars5.inference import Mars5TTS, InferenceConfig as config_class
-		print("Loading model...")
-		mars5, config_class = torch.hub.load(model, 'mars5_english', trust_repo=True)
+			loaded_tts[engine] = {}
+			loaded_tts[engine]['Mars5TTS'] = Mars5TTS
+			loaded_tts[engine]['config_class'] = config_class
+			loaded_tts[engine]['model'] = None
+			del Mars5TTS, config_class
+		progress(0.25, "Loaded Camb.ai Mars5")
+
+		if loaded_tts[engine]['model'] != model:
+			progress(0.30, "Loading model...")
+			loaded_tts[engine]['api'], loaded_tts[engine]['config_class'] = torch.hub.load(model, 'mars5_english', trust_repo=True)
+			loaded_tts[engine]['model'] = model
+
+		progress(0.30, "Loading voice...")
 		wav, sr = librosa.load(voice, mono=True)
 		wav = torch.from_numpy(wav)
-		if sr != mars5.sr:
-			wav = torchaudio.functional.resample(wav, sr, mars5.sr)
-		sr = mars5.sr
-		cfg = config_class(
+		if sr != loaded_tts[engine]['api'].sr:
+			wav = torchaudio.functional.resample(wav, sr, loaded_tts[engine]['api'].sr)
+		sr = loaded_tts[engine]['api'].sr
+		cfg = loaded_tts[engine]['config_class'](
 			deep_clone=advanced_opts['deep_clone'],
 			use_kv_cache=advanced_opts['use_kv_cache'],
 			temperature=advanced_opts['temperature'],
@@ -205,58 +208,58 @@ def generate_tts(engine, model, voice, speaktxt):
 			max_prompt_dur=advanced_opts['max_prompt_dur'])
 		if len(advanced_opts['transcription']) == 0:
 			cfg.deep_clone = False
-			mars5_bool.value.remove('deep_clone')
-		print("Generating...")
-		ar_codes, output_audio = mars5.tts(speaktxt, wav, advanced_opts['transcription'], cfg=cfg)
-		print("Processing audio...")
+			if 'deep_clone' in mars5_bool.value:
+				mars5_bool.value.remove('deep_clone')
+		progress(0.50, "Generating...")
+		ar_codes, output_audio = loaded_tts[engine]['api'].tts(speaktxt, wav, advanced_opts['transcription'], cfg=cfg)
+		progress(0.75, "Processing audio...")
 		audio = output_audio.detach().cpu().numpy()
 	if engine == "parler":
-		if args.skip_preload:
-			print("Loading Parler...")
+		if engine not in loaded_tts:
+			progress(0.15, "Loading Parler...")
 			from parler_tts import ParlerTTSForConditionalGeneration
 			from transformers import AutoTokenizer
-		print("Loading model...")
-		pmodel = ParlerTTSForConditionalGeneration.from_pretrained(model, attn_implementation=advanced_opts['attn_implementation']).to(device)
-		sr = pmodel.config.sampling_rate
+			loaded_tts[engine] = {}
+			loaded_tts[engine]['ParlerTTSForConditionalGeneration'] = ParlerTTSForConditionalGeneration
+			loaded_tts[engine]['AutoTokenizer'] = AutoTokenizer
+			loaded_tts[engine]['model'] = None
+			del ParlerTTSForConditionalGeneration, AutoTokenizer
+		progress(0.25, "Loaded Parler")
+		if loaded_tts[engine]['model'] != model:
+			progress(0.30, "Loading model...")
+			loaded_tts[engine]['api'] = loaded_tts[engine]['ParlerTTSForConditionalGeneration'].from_pretrained(model, attn_implementation=advanced_opts['attn_implementation']).to(device)
+			loaded_tts[engine]['model'] = model
+		sr = loaded_tts[engine]['api'].config.sampling_rate
 		if advanced_opts['compile_mode']:
-			print("Compiling...")
-			pmodel.generation_config.cache_implementation = "static"
-			pmodel.forward = torch.compile(pmodel.forward, mode=advanced_opts['compile_mode'])
-			print("Done.")
-		tokenizer = AutoTokenizer.from_pretrained(model)
+			progress(0.40, "Compiling...")
+			loaded_tts[engine]['api'].generation_config.cache_implementation = "static"
+			loaded_tts[engine]['api'].forward = torch.compile(pmodel.forward, mode=advanced_opts['compile_mode'])
+			progress(0.45, "Done.")
+		tokenizer = loaded_tts[engine]['AutoTokenizer'].from_pretrained(model)
 		description = tokenizer(advanced_opts['description'], return_tensors="pt").to(device)
 		prompt = tokenizer(speaktxt, return_tensors="pt").to(device)
 		if advanced_opts['inc_attn_mask']:
 			model_kwargs = {"input_ids": description.input_ids, "prompt_input_ids": prompt.input_ids, "attention_mask": description.attention_mask, "prompt_attention_mask": prompt.attention_mask}
 		else:
 			model_kwargs = {"input_ids": description.input_ids, "prompt_input_ids": prompt.input_ids}
-		print("Generating...")
-		generation = pmodel.generate(**model_kwargs)
-		print("Processing audio...")
+		progress(0.50, "Generating...")
+		generation = loaded_tts[engine]['api'].generate(**model_kwargs)
+		progress(0.75, "Processing audio...")
 		audio = generation.cpu().numpy().squeeze()
 
 	if not audio.any():
-		print("Processing audio...")
+		progress(0.75, "Processing audio...")
 		audio = ttsgen / np.max(np.abs(ttsgen))
 
-	print("Done.")
+	progress(100, "Done.")
 	return sr, audio
 
 with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
-	def updateVoicesVisibility(tts, model):
-		if (tts == 'coqui' and 'multilingual' in model) or tts == 'tortoise' or tts == 'mars5':
-			voices = getVoices(tts)
+	def updateVoicesVisibility(engine, model):
+		if (engine == 'coqui' and 'multilingual' in model) or engine == 'tortoise' or engine == 'mars5':
+			voices = getVoices(engine)
 			voice = voices[0][1]
 			return gr.Dropdown(choices=voices, visible=True, value=voice)
-#		else:
-#			tortoise_pr = []
-#			for item in tortoise_presets.keys():
-#				if model == item:
-#					value = model
-#				tortoise_pr.append([tortoise_presets[item]['label'],item])
-#
-#			return gr.Dropdown(choices=tortoise_pr, visible=True, value=model)
-#
 		return gr.Dropdown(choices=[['','']], visible=False, value="")
 
 	def updateModels(value):
@@ -272,24 +275,30 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		if value == "parler":
 			return gr.Dropdown(choices=['parler-tts/parler-tts-mini-v1', 'parler-tts/parler-tts-large-v1'], value='parler-tts/parler-tts-large-v1', label="TTS Model")
 
-	def updateAdvancedVisiblity(value):
-		if value == "tortoise":
-			updateAdvancedOpts(value, tortoise_opts_comp.value, tortoise_temperature.value, tortoise_diffusion_temperature.value, tortoise_num_autoregressive_samples.value, tortoise_diffusion_iterations.value)
+	def updateOpts(engine):
+		if engine == "tortoise":
+			updateAdvancedOpts(engine, tortoise_opts_comp.value, tortoise_temperature.value, tortoise_diffusion_temperature.value, tortoise_num_autoregressive_samples.value, tortoise_diffusion_iterations.value)
+		elif engine == "mars5":
+			updateAdvancedOpts(engine, mars5_transcription.value, mars5_bool.value, mars5_temperature.value, mars5_top_k.value, mars5_top_p.value, mars5_rep_penalty_window.value, mars5_freq_penalty.value, mars5_presence_penalty.value, mars5_max_prompt_dur.value)
+		elif engine == "parler":
+			updateAdvancedOpts(engine, parler_options.value, parler_description.value, parler_attn_implementation.value, parler_temperature.value)
+		else:
+			updateAdvancedOpts(engine)
+
+	def updateAdvancedVisiblity(engine):
+		if engine == "tortoise":
 			return {
 				tortoise_opts: gr.Group(visible=True),
 				mars5_opts: gr.Group(visible=False),
 				parler_opts: gr.Group(visible=False)
 			}
-		elif value == "mars5":
-			updateAdvancedOpts(value, mars5_transcription.value, mars5_bool.value, mars5_temperature.value, mars5_top_k.value, mars5_top_p.value, mars5_rep_penalty_window.value, mars5_freq_penalty.value, mars5_presence_penalty.value, mars5_max_prompt_dur.value)
+		elif engine == "mars5":
 			return {
 				tortoise_opts: gr.Group(visible=False),
 				mars5_opts: gr.Group(visible=True),
 				parler_opts: gr.Group(visible=False)
 			}
-		elif value == "parler":
-
-			updateAdvancedOpts(value, parler_description.value, parler_attn_implementation.value, parler_options.value, parler_temperature.value)
+		elif engine == "parler":
 			return {
 				tortoise_opts: gr.Group(visible=False),
 				mars5_opts: gr.Group(visible=False),
@@ -301,22 +310,23 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 				mars5_opts: gr.Group(visible=False),
 				parler_opts: gr.Group(visible=False)
 			}
+		updateOpts(engine)
 
-	def getVoices(value):
-		if value == "mars5":
+	def getVoices(engine):
+		if engine == "mars5":
 			# Scan samples and srcwavs, and return each wav individually
 			wavs = [[item.replace('./sample/',''),item] for item in sorted(glob.glob('./sample/**/*.wav', recursive=True))]
 			wavs.extend([[item.replace('./srcwav/',''),item] for item in sorted(glob.glob('./srcwav/**/*.wav', recursive=True))])
-		elif value == "coqui" or value == "tortoise":
+		elif engine == "coqui" or engine == "tortoise":
 			# Scan samples and srcwavs, but return the folder, not each wav
 			wavs = [[item.replace('./sample/',''),item] for item in sorted(glob.glob('./sample/*'))]
 			wavs.extend([[item.replace('./srcwav/',''),item] for item in sorted(glob.glob('./srcwav/*'))])
 		return wavs
 
-	def updateAdvancedOpts(tts, *args):
+	def updateAdvancedOpts(engine, *args):
 		# wtf...
 		global advanced_opts
-		if tts == "tortoise":
+		if engine == "tortoise":
 			use_deepspeed, kv_cache, half, cond_free = [False, False, False, False]
 			if 'use_deepspeed' in args[0]:
 				use_deepspeed = True
@@ -337,7 +347,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 				'num_autoregressive_samples': args[3],
 				'diffusion_iterations': args[4]
 			}
-		elif tts == "mars5":
+		elif engine == "mars5":
 			advanced_opts = {
 				'transcription': args[0],
 				'deep_clone': ('deep_clone' in args[1]),
@@ -350,16 +360,16 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 				'presence_penalty': args[7],
 				'max_prompt_dur': args[8]
 			}
-		elif tts == "parler":
+		elif engine == "parler":
 			compile_mode, inc_attn_mask = [False,False]
-			if 'compile_mode' in args[2]:
+			if 'compile_mode' in args[0]:
 				compile_mode = True
-			if 'inc_attn_mask' in args[2]:
+			if 'inc_attn_mask' in args[0]:
 				inc_attn_mask = True
 
 			advanced_opts = {
-				'description': args[0],
-				'attn_implementation': args[1],
+				'description': args[1],
+				'attn_implementation': args[2],
 				'compile_mode': 'default' if compile_mode else False,
 				'inc_attn_mask': inc_attn_mask,
 				'temperature': args[3]
@@ -367,11 +377,11 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		else:
 			advanced_opts = {}
 
-	def voiceChanged(tts, voice):
+	def voiceChanged(engine, voice):
 		# Read .txt file if it exists and toggle Deep Clone accordingly
 		m5_bool_value = mars5_bool.value.copy()
 		out = ''
-		if tts == "mars5":
+		if engine == "mars5":
 			text = voice.replace(".wav",".txt")
 			if os.path.isfile(text):
 				f = open(text,"r");
@@ -387,9 +397,9 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 			mars5_bool: gr.CheckboxGroup(value=m5_bool_value),
 		}
 
-	def presetChanged(tts, model):
+	def presetChanged(engine, model):
 		tortoise_opts_value = tortoise_opts_comp.value.copy()
-		if tts == "tortoise":
+		if engine == "tortoise":
 			if 'cond_free' not in tortoise_presets[model]:
 				# True
 				if 'cond_free' not in tortoise_opts_value:
@@ -411,29 +421,26 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 		}
 
 	voices = getVoices("coqui")
-	tts_select = gr.Radio(tts_engines, type="value", value="coqui", label="TTS Engine")
 	voice = voices[0][1]
-	voice_select = gr.Dropdown(choices=voices, value=voice, type="value", visible=True, label="Voice Cloning", info="Place your custom voices in /home/app/srcwav/Desired Name/File1.wav, etc")
-	model_select = gr.Dropdown(coqui_voice_models, type="value", value=coqui_voice_models[0], label="TTS Model")
-	audioout = gr.Audio(show_download_button=True, label="Generated Audio")
-	speak_text = gr.Textbox(value="Welcome to the multi text to speech generator", label="Text to speak", lines=3)
-	demo2 = gr.Interface(
-		generate_tts,
-		[
-			tts_select,
-			model_select,
-			voice_select,
-			speak_text,
-		],
-		audioout,
-		title="zefie's Multi-TTS v"+str(version),
-		allow_flagging="never",
-		submit_btn="Generate",
-		show_progress='full',
-	)
+	with gr.Group() as main_group:
+		with gr.Row():
+			gr.Markdown("# <p style=\"text-align: center;\">zefie's Multi-TTS v"+str(version)+"</p>")
+		with gr.Row():
+			with gr.Column():
+				tts_select = gr.Radio(tts_engines, type="value", value="coqui", label="TTS Engine")
+				model_select = gr.Dropdown(coqui_voice_models, type="value", value=coqui_voice_models[0], label="TTS Model")
+				voice_select = gr.Dropdown(choices=voices, value=voice, type="value", visible=True, label="Voice Cloning", info="Place your custom voices in /home/app/srcwav/Desired Name/File1.wav, etc")
+				speak_text = gr.Textbox(value="Welcome to the multi text to speech generator", label="Text to speak", lines=3)
+			with gr.Column():
+				audioout = gr.Audio(show_download_button=True, label="Generated Audio", interactive=False, scale=4)
+		with gr.Row():
+			submit_btn = gr.Button("Submit", variant="primary")
+
 	with gr.Group(visible=False) as tortoise_opts:
 		with gr.Row():
-			tortoise_opts_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],['Conditioning-Free Diffusion','cond_free'],["fp16 (half)","half"]], label="Tortoise Advanced Options", value=['use_deepspeed','kv_cache','cond_free'])
+			gr.Markdown("<p style=\"padding-left: 10px\">Tortoise Advanced Options</p>")
+		with gr.Row():
+			tortoise_opts_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],['Conditioning-Free Diffusion','cond_free'],["fp16 (half)","half"]], value=['use_deepspeed','kv_cache','cond_free'])
 		with gr.Row():
 			tortoise_temperature = gr.Slider(value=0.8, minimum=0, maximum=3, label="Temperature", info="The softmax temperature of the autoregressive model.")
 			tortoise_diffusion_temperature = gr.Slider(value=1, minimum=0, maximum=1, label="Difussion Temperature", info="Controls the variance of the noise fed into the diffusion model. Values at 0 are the \"mean\" prediction of the diffusion network and will sound bland and smeared")
@@ -441,9 +448,13 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 			tortoise_num_autoregressive_samples = gr.Slider(value=256, minimum=16, maximum=2048, label="# of Autoregressive Samples", info="Number of samples taken from the autoregressive model, all of which are filtered using CLVP. As Tortoise is a probabilistic model, more samples means a higher probability of creating something \"great\".")
 			tortoise_diffusion_iterations = gr.Slider(value=200, minimum=30, maximum=4000, label="Diffusion Iterations", info="Number of diffusion steps to perform. More steps means the network has more chances to iteratively refine the output, which should theoretically mean a higher quality output. Generally a value above 250 is not noticeably better, however.")
 	with gr.Group(visible=False) as mars5_opts:
-		mars5_bool = gr.CheckboxGroup([["Deep Clone (requires transcription)","deep_clone"],["Use KV Cache","use_kv_cache"]],label="Camb.ai Mars5 Advanced Options", value=['use_kv_cache'])
-		mars5_transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription (Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
-		mars5_temperature = gr.Slider(value=0.7, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
+		with gr.Row():
+			gr.Markdown("<p style=\"padding-left: 10px\">Camb.ai Mars5 Advanced Options</p>")
+		with gr.Row():
+			mars5_transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription 	(Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
+		with gr.Row():
+			mars5_bool = gr.CheckboxGroup([["Deep Clone (requires transcription)","deep_clone"],["Use KV Cache","use_kv_cache"]], value=['use_kv_cache'])
+			mars5_temperature = gr.Slider(value=0.7, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
 		with gr.Row():
 			mars5_top_k = gr.Slider(value=200,minimum=0,maximum=1000, label="top_k", info="used for sampling, keeps tokens with the highest probabilities until a certain number (top_k) is reached")
 			mars5_rep_penalty_window = gr.Slider(value=80,minimum=0,maximum=200,label="rep_penalty_window",info="how far in the past to consider when penalizing repetitions. default equates to 5s")
@@ -454,7 +465,10 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 			mars5_max_prompt_dur = gr.Slider(value=12,minimum=1,maximum=30,label="max_prompt_dur",info="maximum length prompt is allowed, in seconds")
 			mars5_presence_penalty = gr.Slider(value=0.4,minimum=0,maximum=1,label="presence_penalty",info="increasing it would increase token diversity")
 	with gr.Group(visible=False) as parler_opts:
-		parler_description = gr.Textbox("A female speaker delivers a slightly expressive and animated speech with a moderate speed and pitch. The recording is of very high quality, with the speaker's voice sounding clear and very close up.", lines=3, placeholder="Type your description here, it should describe how you would like the voice to sound",label="Description",info="Describe how you would like the voice to sound.")
+		with gr.Row():
+			gr.Markdown("<p style=\"padding-left: 10px\">Parler Advanced Options</p>")
+		with gr.Row():
+			parler_description = gr.Textbox("A female speaker delivers a slightly expressive and animated speech with a moderate speed and pitch. The recording is of very high quality, with the speaker's voice sounding clear and very close up.", lines=3, placeholder="Type your description here, it should describe how you would like the voice to sound",label="Description",info="Describe how you would like the voice to sound.")
 		with gr.Row():
 			parler_temperature = gr.Slider(value=1, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
 		with gr.Row():
@@ -466,10 +480,12 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 	voices_group = {'fn': updateVoicesVisibility, 'inputs': [tts_select, model_select], 'outputs': voice_select}
 	tortoise_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations]}
 	mars5_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur]}
-	parler_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, parler_description, parler_attn_implementation, parler_options, parler_temperature]}
+	parler_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, parler_options, parler_description, parler_attn_implementation,  parler_temperature]}
 	voiceChanged_group = {'fn': voiceChanged, 'inputs': [tts_select, voice_select], 'outputs': [mars5_transcription, mars5_bool]}
 	presetChanged_group = {'fn': presetChanged, 'inputs': [tts_select, model_select], 'outputs': [tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, tortoise_opts_comp]}
 
+
+	submit_btn.click(generate_tts, [tts_select, model_select, voice_select, speak_text], audioout)
 	tts_select.change(updateModels,tts_select,model_select)
 	tts_select.change(**groups_group)
 	mars5_bool.change(**mars5_group)
@@ -494,8 +510,9 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme) as demo:
 	model_select.change(**voiceChanged_group)
 	model_select.change(**presetChanged_group)
 	model_select.change(**voices_group)
+	tts_select.change(updateOpts, tts_select)
 
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0")
+    demo.queue().launch(server_name="0.0.0.0")
 
