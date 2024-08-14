@@ -6,7 +6,7 @@ Currently includes [Suno Bark](https://github.com/suno-ai/bark), [Coqui](https:/
 
 Example usage (CLI):
 
-`docker run --rm -it --gpus all -p 7860:7860 -v multitts-cache:/root/.cache -v ./srcwav:/home/app/srcwav zefie/multi-tts`
+`docker run --rm -it --gpus all -p 7860:7860 -v multitts-cache:/root/.cache -v ./srcwav:/home/app/srcwav zefie/multi-tts:latest`
  
 I recommend running from the CLI if you intend to use Coqui and their voice cloning models (e.g. the first 3 in the list), as you will have to press `Y` to accept their license before it downloads. Once you have the 3 models you can run this in a compose.
 
@@ -39,6 +39,7 @@ Play around with your source files until you get the voice you desire. The scrip
 `git clone https://github.com/zefie/multi-tts.git --depth=1 && cd multi-tts && docker build -t multi-tts:latest .`
 
 ## Screenshots
-![Coqui](https://github.com/zefie/multi-tts/blob/main/screenshots/20240812_coqui.png?raw=true)
-![Parler](https://github.com/zefie/multi-tts/blob/main/screenshots/20240812_parler.png?raw=true)
-![Camb.ai Mars5](https://github.com/zefie/multi-tts/blob/main/screenshots/20240812_mars5.png?raw=true)
+![Coqui](https://github.com/zefie/multi-tts/blob/main/screenshots/20240813_coqui.png?raw=true)
+![Parler](https://github.com/zefie/multi-tts/blob/main/screenshots/20240813_parler.png?raw=true)
+![TorToiSe](https://github.com/zefie/multi-tts/blob/main/screenshots/20240813_tortoise.png?raw=true)
+![Camb.ai Mars5](https://github.com/zefie/multi-tts/blob/main/screenshots/20240813_mars5.png?raw=true)
