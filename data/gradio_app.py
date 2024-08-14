@@ -10,7 +10,7 @@ import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time
 import scipy.io.wavfile as wav
 from string import ascii_letters, digits, punctuation
 
-loaded_tts = { 'voice': None, 'logs': '' }
+loaded_tts = { 'voice': None }
 
 version = 20240813
 
@@ -481,23 +481,30 @@ def updateAdvancedOpts(engine, *args):
 		advanced_opts = {}
 
 def voiceChanged(engine, voice):
+	global loaded_tts
 	# Read .txt file if it exists and toggle Deep Clone accordingly
 	m5_bool_value = mars5_bool.value.copy()
 	out = ''
+	if voice:
+		loaded_tts['voice'] = voice
 	if engine == "mars5":
 		text = voice.replace(".wav",".txt")
 		if os.path.isfile(text):
 			f = open(text,"r");
 			out = f.read();
 			f.close()
-		if 'deep_clone' not in mars5_bool.value:
-			m5_bool_value.append('deep_clone')
-	else:
-		if 'deep_clone' in mars5_bool.value:
+			if 'deep_clone' not in mars5_bool.value:
+				m5_bool_value.append('deep_clone')
+		else:
+			if 'deep_clone' in mars5_bool.value:
 				m5_bool_value.remove('deep_clone')
+		return {
+			mars5_transcription: gr.Textbox(value=out),
+			mars5_bool: gr.CheckboxGroup(value=m5_bool_value),
+		}
 	return {
-		mars5_transcription: gr.Textbox(value=out),
-		mars5_bool: gr.CheckboxGroup(value=m5_bool_value),
+		mars5_transcription: gr.Textbox(),
+		mars5_bool: gr.CheckboxGroup(),
 	}
 
 def presetChanged(engine, model):
