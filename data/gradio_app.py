@@ -6,7 +6,7 @@ print("Loading torch, torchaudio, and librosa...")
 import torch, torchaudio, librosa
 print("Loading miscellanous modules...")
 from TTS.utils.manage import ModelManager
-import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins, sys, argparse
+import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins, sys, argparse, gc
 import scipy.io.wavfile as wav
 from string import ascii_letters, digits, punctuation
 
@@ -102,6 +102,21 @@ def strip_unicode(string):
     ascii_chars = set(ascii_letters + digits + punctuation) - {' ', '\t', '\n'}
     return ''.join([c for c in string if (ord(c) <= 127 and ord(c) not in (0xc0, 0xc1)) or c in ascii_chars])
 
+def unload_engines(keep):
+	global loaded_tts
+	keys = []
+	for engine in loaded_tts.keys():
+		keys.append(engine)
+	for engine in keys:
+		if keep != engine:
+			print('Unloading '+engine+'...')
+			del loaded_tts[engine]
+	gc.collect()
+	if device == 'cuda':
+		torch.cuda.empty_cache()
+
+
+
 def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 	global advanced_opts, loaded_tts
 	print("Advanced Options:", advanced_opts)
@@ -117,6 +132,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		if engine not in loaded_tts:
 			progress(0.15, "Loading Coqui...")
 			from TTS.api import TTS as tts_api
+			unload_engines(engine)
 			loaded_tts[engine] = {}
 			loaded_tts[engine]['api'] = tts_api
 			loaded_tts[engine]['engine'] = loaded_tts[engine]['api']().to(device)
@@ -152,6 +168,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		if engine not in loaded_tts:
 			progress(0.15, "Loading Bark...")
 			import bark
+			unload_engines(engine)
 			loaded_tts[engine] = bark
 		progress(0.25, "Loaded Bark")
 		sr = loaded_tts[engine].SAMPLE_RATE;
@@ -160,6 +177,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 	if engine == "tortoise":
 		if engine not in loaded_tts:
 			progress(0.15,"Loading TorToiSe...")
+			unload_engines(engine)
 			from tortoise import utils, api
 			loaded_tts[engine] = {}
 			loaded_tts[engine]['api'] = api
@@ -177,6 +195,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 	if engine == "mars5":
 		if engine not in loaded_tts:
 			progress(0.15, "Loading Camb.ai Mars5...")
+			unload_engines(engine)
 			from mars5.inference import Mars5TTS, InferenceConfig as config_class
 			loaded_tts[engine] = {}
 			loaded_tts[engine]['Mars5TTS'] = Mars5TTS
@@ -217,6 +236,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 	if engine == "parler":
 		if engine not in loaded_tts:
 			progress(0.15, "Loading Parler...")
+			unload_engines(engine)
 			from parler_tts import ParlerTTSForConditionalGeneration
 			from transformers import AutoTokenizer
 			loaded_tts[engine] = {}
