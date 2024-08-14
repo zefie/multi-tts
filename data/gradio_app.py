@@ -10,7 +10,7 @@ import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time
 import scipy.io.wavfile as wav
 from string import ascii_letters, digits, punctuation
 
-loaded_tts = { 'voice': None }
+loaded_tts = { 'voice': None, 'logs': '' }
 
 version = 20240813
 
@@ -27,6 +27,48 @@ for dir in paths:
 
 # Get device for torch
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+class Logger:
+	logdata = ""
+	def __init__(self, terminal):
+		self.terminal = terminal
+
+	def read(self):
+		return self.logdata
+
+	def write(self, message):
+		self.terminal.write(message)
+		self.logdata += message
+
+	def flush(self):
+		self.terminal.flush()
+
+	def clear(self):
+		self.logdata = ""
+
+	def terminal(self):
+		return self.terminal
+
+	def isatty(self):
+		return False
+
+
+sys.stdout = io.TextIOWrapper(
+    sys.stdout.buffer,
+    encoding="utf-8",
+    errors="replace",
+    newline="",
+    line_buffering=True,
+)
+sys.stderr = io.TextIOWrapper(
+    sys.stderr.buffer,
+    encoding="utf-8",
+    errors="replace",
+    newline="",
+    line_buffering=True,
+)
+
+sys.stdout = Logger(sys.stdout)
 
 # save stdout to a var for restoring with unmute()
 stdout = sys.stdout
@@ -74,46 +116,12 @@ for model in manager.list_models():
 		coqui_voice_models.append(model)
 unmute()
 
-class Logger:
-    def __init__(self, filename):
-        self.terminal = sys.stdout
-        self.log = open(filename, "w", encoding="utf-8")
-
-    def write(self, message):
-        self.terminal.write(message)
-        self.log.write(message)
-
-    def flush(self):
-        self.terminal.flush()
-        self.log.flush()
-
-    def isatty(self):
-        return False
-
-
-sys.stdout = io.TextIOWrapper(
-    sys.stdout.buffer,
-    encoding="utf-8",
-    errors="replace",
-    newline="",
-    line_buffering=True,
-)
-sys.stderr = io.TextIOWrapper(
-    sys.stderr.buffer,
-    encoding="utf-8",
-    errors="replace",
-    newline="",
-    line_buffering=True,
-)
-
-sys.stdout = Logger("gradio_terminal_ouput.log")
-
 css_style = """
 .bark_console {
 	font: 1.3rem Inconsolata, monospace;
 	white-space: pre;
 	padding: 5px;
-	border: 2px dashed orange;
+	border: 2px dashed purple;
 	border-radius: 3px;
 	max-height: 500px;
 	overflow-y: scroll;
@@ -121,11 +129,6 @@ css_style = """
 	overflow-x: hidden;
 }
 """
-
-def read_logs():
-    sys.stdout.flush()
-    with open("gradio_terminal_ouput.log", "r", encoding="utf-8") as f:
-        return f.read()
 
 # This seems broken, and we already have Bark and Tortoise
 coqui_voice_models.remove('tts_models/multilingual/multi-dataset/bark')
@@ -531,6 +534,13 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 			wavs.extend([[item.replace('./srcwav/',''),item] for item in sorted(glob.glob('./srcwav/*'))])
 		return wavs
 
+	def read_log():
+		sys.stdout.flush()
+		return sys.stdout.read();
+
+	def clear_log():
+		sys.stdout.clear()
+
 	voices = getVoices("coqui")
 	voice = voices[0][1]
 	with gr.Tab("TTS"):
@@ -589,11 +599,9 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 	with gr.Tab("Logs"):
 		with gr.Row():
 			console_logs = gr.HTML(elem_classes="bark_console")
-			def clear_logs():
-				with open("gradio_terminal_ouput.log", "w", encoding="utf-8") as f:
-					f.write("")
-			clear_button = gr.Button("Clear The Console")
-			clear_button.click(clear_logs)
+		with gr.Row():
+			clear_button = gr.Button("Clear Log")
+			clear_button.click(clear_log)
 
 	groups_group = {'fn': updateAdvancedVisiblity, 'inputs': tts_select, "outputs": [tortoise_opts, mars5_opts, parler_opts]}
 	voices_group = {'fn': updateVoicesVisibility, 'inputs': [tts_select, model_select, voice_select], 'outputs': voice_select}
@@ -630,8 +638,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 	model_select.change(**presetChanged_group)
 	model_select.change(**voices_group)
 	tts_select.change(updateOpts, tts_select)
-	demo.load(read_logs, None, console_logs, every=2)
-
+	demo.load(read_log, None, console_logs, every=2)
 
 if __name__ == "__main__":
 	demo.queue().launch(server_name="0.0.0.0")
