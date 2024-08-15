@@ -53,6 +53,8 @@ class Logger:
 		return False
 
 
+sys.stdin = io.StringIO(f"n\n")
+
 sys.stdout = io.TextIOWrapper(
     sys.stdout.buffer,
     encoding="utf-8",
@@ -189,6 +191,11 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 	print("Preparing...")
 	if engine == "coqui":
 		sr = getSampleRate(model)
+		sys.stdin.seek(0)
+		if sys.stdin.read() != f"y\n" and 'xtts' in model:
+			raise gr.Error("Please accept the Coqui Public Model License (CPML) before using XTTS models!")
+			return sr, None
+		sys.stdin.seek(0)
 		speaktxt = strip_unicode(speaktxt)
 		os.environ["TTS_HOME"] = "./coqui/"
 		if engine not in loaded_tts:
@@ -244,6 +251,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		print("Generating...")
 		ttsgen = loaded_tts[engine].generate_audio(speaktxt, history_prompt="bark/assets/prompts/"+model+".npz")
 	if engine == "tortoise":
+		sr = 24000
 		if engine not in loaded_tts:
 			progress(0.15,"Loading TorToiSe...")
 			print("Loading TorToiSe...")
@@ -256,8 +264,6 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		progress(0.25, "Loaded TorToiSe")
 		print("Loaded TorToiSe")
 		loaded_tts[engine]['model'] = None
-		sr = 24000
-		reference_clips = [loaded_tts[engine]['utils'].audio.load_audio(p, 22050) for p in glob.glob(voice + "/*.wav")]
 		progress(0.50, "Generating...")
 		print("Generating...")
 		tts = loaded_tts[engine]['api'].TextToSpeech(use_deepspeed=advanced_opts['use_deepspeed'], kv_cache=advanced_opts['kv_cache'], half=advanced_opts['half'], device=device)
@@ -401,26 +407,37 @@ def updateOpts(engine):
 		updateAdvancedOpts(engine)
 
 def updateAdvancedVisiblity(engine):
+	if engine == "coqui":
+		return {
+			coqui_opts: gr.Group(visible=True),
+			tortoise_opts: gr.Group(visible=False),
+			mars5_opts: gr.Group(visible=False),
+			parler_opts: gr.Group(visible=False)
+		}
 	if engine == "tortoise":
 		return {
+			coqui_opts: gr.Group(visible=False),
 			tortoise_opts: gr.Group(visible=True),
 			mars5_opts: gr.Group(visible=False),
 			parler_opts: gr.Group(visible=False)
 		}
 	elif engine == "mars5":
 		return {
+			coqui_opts: gr.Group(visible=False),
 			tortoise_opts: gr.Group(visible=False),
 			mars5_opts: gr.Group(visible=True),
 			parler_opts: gr.Group(visible=False)
 		}
 	elif engine == "parler":
 		return {
+			coqui_opts: gr.Group(visible=False),
 			tortoise_opts: gr.Group(visible=False),
 			mars5_opts: gr.Group(visible=False),
 			parler_opts: gr.Group(visible=True)
 		}
 	else:
 		return {
+			coqui_opts: gr.Group(visible=False),
 			tortoise_opts: gr.Group(visible=False),
 			mars5_opts: gr.Group(visible=False),
 			parler_opts: gr.Group(visible=False)
@@ -539,11 +556,19 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 			# Scan samples and srcwavs, but return the folder, not each wav
 			wavs = [[item.replace('./sample/',''),item] for item in sorted(glob.glob('./sample/*'))]
 			wavs.extend([[item.replace('./srcwav/',''),item] for item in sorted(glob.glob('./srcwav/*'))])
+			wavs.extend([[item.replace('./tortoise-tts/tortoise/voices','tortoise'),item] for item in sorted(glob.glob('./tortoise-tts/tortoise/voices/*'))])
 		return wavs
 
 	def read_log():
 		sys.stdout.flush()
-		return sys.stdout.read();
+		return sys.stdout.read(), gr.Button();
+
+	def toggleAcceptance(value):
+		sys.stdin.seek(0)
+		if value:
+			sys.stdin.write(f"y\n")
+		else:
+			sys.stdin.write(f"n\n")
 
 	def clear_log():
 		sys.stdout.clear()
@@ -565,6 +590,11 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 			with gr.Row():
 				submit_btn = gr.Button("Submit", variant="primary")
 
+		with gr.Group() as coqui_opts:
+			with gr.Row():
+				gr.HTML("<p style=\"padding-left: 10px\">Coqui Advanced Options - Read the <a href='https://coqui.ai/cpml' target='_blank'>Coqui Public Model License (CPML)</a></p>")
+			with gr.Row():
+				xtts_licence = gr.Checkbox(label="I agree to the CPML", value=False, info="Must be checked before using XTTS models.")
 		with gr.Group(visible=False) as tortoise_opts:
 			with gr.Row():
 				gr.Markdown("<p style=\"padding-left: 10px\">Tortoise Advanced Options</p>")
@@ -610,7 +640,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 			clear_button = gr.Button("Clear Log")
 			clear_button.click(clear_log)
 
-	groups_group = {'fn': updateAdvancedVisiblity, 'inputs': tts_select, "outputs": [tortoise_opts, mars5_opts, parler_opts]}
+	groups_group = {'fn': updateAdvancedVisiblity, 'inputs': tts_select, "outputs": [coqui_opts, tortoise_opts, mars5_opts, parler_opts]}
 	voices_group = {'fn': updateVoicesVisibility, 'inputs': [tts_select, model_select, voice_select], 'outputs': voice_select}
 	tortoise_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations]}
 	mars5_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur]}
@@ -619,6 +649,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 	presetChanged_group = {'fn': presetChanged, 'inputs': [tts_select, model_select], 'outputs': [tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, tortoise_opts_comp]}
 
 
+	xtts_licence.change(toggleAcceptance, xtts_licence)
 	submit_btn.click(generate_tts, [tts_select, model_select, voice_select, speak_text], audioout)
 	tts_select.change(updateModels,tts_select,model_select)
 	tts_select.change(**groups_group)
