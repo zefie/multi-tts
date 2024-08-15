@@ -552,6 +552,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 			# Scan samples and srcwavs, and return each wav individually
 			wavs = [[item.replace('./sample/',''),item] for item in sorted(glob.glob('./sample/**/*.wav', recursive=True))]
 			wavs.extend([[item.replace('./srcwav/',''),item] for item in sorted(glob.glob('./srcwav/**/*.wav', recursive=True))])
+			wavs.extend([[item.replace('./tortoise-tts/tortoise/voices','tortoise'),item] for item in sorted(glob.glob('./tortoise-tts/tortoise/voices/**/*.wav'))])
 		elif engine == "coqui" or engine == "tortoise":
 			# Scan samples and srcwavs, but return the folder, not each wav
 			wavs = [[item.replace('./sample/',''),item] for item in sorted(glob.glob('./sample/*'))]
