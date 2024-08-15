@@ -12,7 +12,7 @@ from string import ascii_letters, digits, punctuation
 
 loaded_tts = { 'voice': None }
 
-version = 20240814
+version = 20240815
 
 paths = [
 	'/root/.cache/coqui',
@@ -193,8 +193,14 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		sr = getSampleRate(model)
 		sys.stdin.seek(0)
 		if sys.stdin.read() != f"y\n" and 'xtts' in model:
-			raise gr.Error("Please accept the Coqui Public Model License (CPML) before using XTTS models!")
-			return sr, None
+			gr.Warning("Please agree to the Coqui Public Model License (CPML) before using XTTS models.")
+			print("Please agree to the Coqui Public Model License (CPML) before using XTTS models.")
+			import wave
+			ifile = wave.open("/home/app/coqui/cpml.wav")
+			audio = ifile.getnframes()
+			audio = ifile.readframes(audio)
+			audio = np.frombuffer(audio, dtype=np.int16)
+			return sr, audio
 		sys.stdin.seek(0)
 		speaktxt = strip_unicode(speaktxt)
 		os.environ["TTS_HOME"] = "./coqui/"
@@ -256,7 +262,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 			progress(0.15,"Loading TorToiSe...")
 			print("Loading TorToiSe...")
 			unload_engines(engine)
-			from tortoise import utils, api
+			from tortoise import api, utils
 			loaded_tts[engine] = {}
 			loaded_tts[engine]['api'] = api
 			loaded_tts[engine]['utils'] = utils
@@ -264,6 +270,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		progress(0.25, "Loaded TorToiSe")
 		print("Loaded TorToiSe")
 		loaded_tts[engine]['model'] = None
+		reference_clips = [loaded_tts[engine]['utils'].audio.load_audio(p, 22050) for p in glob.glob(voice + "/*.wav")]
 		progress(0.50, "Generating...")
 		print("Generating...")
 		tts = loaded_tts[engine]['api'].TextToSpeech(use_deepspeed=advanced_opts['use_deepspeed'], kv_cache=advanced_opts['kv_cache'], half=advanced_opts['half'], device=device)
