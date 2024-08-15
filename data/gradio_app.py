@@ -12,7 +12,7 @@ from string import ascii_letters, digits, punctuation
 
 loaded_tts = { 'voice': None }
 
-version = 20240813
+version = 20240814
 
 paths = [
 	'/root/.cache/coqui',
