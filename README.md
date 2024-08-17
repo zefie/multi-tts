@@ -1,12 +1,15 @@
 # zefie's Multi-TTS Docker
 
-Currently includes [Suno Bark](https://github.com/suno-ai/bark), [Coqui](https://github.com/coqui-ai/TTS), [Parler](https://github.com/huggingface/parler-tts), [TorToiSe](https://github.com/neonbjb/tortoise-tts), and [Camb.ai Mars5](https://github.com/Camb-ai/MARS5-TTS/).
+Currently includes 
+[Camb.ai Mars5](https://github.com/Camb-ai/MARS5-TTS/), [Coqui](https://github.com/coqui-ai/TTS), [Parler](https://github.com/huggingface/parler-tts), [Suno Bark](https://github.com/suno-ai/bark), and [TorToiSe](https://github.com/neonbjb/tortoise-tts).
 
 ## Usage:
 
+**New 20240817** The application now runs as the user "app" so if you are upgrading, change your paths from `/root/.cache` to `/home/app/.cache`
+
 Example usage (CLI):
 
-`docker run --rm -it --gpus all -p 7860:7860 -v multitts-cache:/root/.cache -v ./srcwav:/home/app/srcwav zefie/multi-tts:latest`
+`docker run --rm -it --gpus all -p 7860:7860 -v multitts-cache:/home/app/.cache -v ./srcwav:/home/app/srcwav zefie/multi-tts:latest`
  
 I recommend running from the CLI if you intend to use Coqui and their XTTS voice cloning models (e.g. the first 2 in the list), as you will have to press `Y` to accept their license before it downloads. Once you have the 2 models you can run this in a compose.
 
@@ -18,7 +21,7 @@ Example usage (Docker Compose):
       - 7860:7860
     volumes:
       - ./srcwav:/home/app/srcwav
-      - multitts-cache:/root/.cache
+      - multitts-cache:/home/app/.cache
     deploy:
       resources:
         reservations:
@@ -39,7 +42,7 @@ Play around with your source files until you get the voice you desire. The scrip
 `git clone https://github.com/zefie/multi-tts.git --depth=1 && cd multi-tts && docker build -t multi-tts:latest .`
 
 ## Screenshots
-![Coqui](https://github.com/zefie/multi-tts/blob/main/screenshots/20240813_coqui.png?raw=true)
+![Coqui](https://github.com/zefie/multi-tts/blob/main/screenshots/20240817_coqui.png?raw=true)
 ![Parler](https://github.com/zefie/multi-tts/blob/main/screenshots/20240813_parler.png?raw=true)
 ![TorToiSe](https://github.com/zefie/multi-tts/blob/main/screenshots/20240813_tortoise.png?raw=true)
 ![Camb.ai Mars5](https://github.com/zefie/multi-tts/blob/main/screenshots/20240813_mars5.png?raw=true)

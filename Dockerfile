@@ -25,18 +25,21 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN mkdir -p /home/app
 
 RUN mkdir -p /home/app/coqui && \
-    ln -s /root/.cache/coqui/tts /home/app/coqui/tts && \
-    ln -s /root/.cache/coqui/vocoder /home/app/coqui/vocoder && \
-    ln -s /root/.cache/coqui/speaker_encoder /home/app/coqui/speaker_encoder
+    ln -s /home/app/.cache/coqui/tts /home/app/coqui/tts && \
+    ln -s /home/app/.cache/coqui/vocoder /home/app/coqui/vocoder && \
+    ln -s /home/app/.cache/coqui/speaker_encoder /home/app/coqui/speaker_encoder
 
 COPY ./data/tortoise-tts /home/app/tortoise-tts
 COPY ./data/parler-tts /home/app/parler-tts
 
 RUN --mount=type=cache,target=/root/.cache/pip cd /home/app && \
-	pip install ./tortoise-tts ./parler-tts
+	pip install ./tortoise-tts ./parler-tts nvidia-ml-py3
 
-COPY ./data /home/app
+RUN groupadd app && useradd -d /home/app -g app -G users app && chown app:app -R /home/app
 
+COPY --chown=app:app ./data /home/app
+
+USER "app"
 EXPOSE 7860
 WORKDIR "/home/app"
 CMD ["python", "gradio_app.py"]
