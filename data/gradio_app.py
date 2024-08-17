@@ -6,19 +6,23 @@ print("Loading torch, torchaudio, and librosa...")
 import torch, torchaudio, librosa
 print("Loading miscellanous modules...")
 from TTS.utils.manage import ModelManager
-import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins, sys, argparse, gc, io
+import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins, sys, argparse, gc, io, psutil
 import scipy.io.wavfile as wav
 from string import ascii_letters, digits, punctuation
 
-loaded_tts = { 'voice': None }
+loaded_tts = {}
+globals = ['voice']
 
-version = 20240815
+for f in globals:
+	loaded_tts[f] = None
+
+version = 20240817
 
 paths = [
-	'/root/.cache/coqui',
-	'/root/.cache/coqui/tts',
-	'/root/.cache/coqui/vocoder',
-	'/root/.cache/coqui/speaker_encoder',
+	'/home/app/.cache/coqui',
+	'/home/app/.cache/coqui/tts',
+	'/home/app/.cache/coqui/vocoder',
+	'/home/app/.cache/coqui/speaker_encoder',
 ]
 
 for dir in paths:
@@ -27,6 +31,33 @@ for dir in paths:
 
 # Get device for torch
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+if device == "cuda":
+	import nvidia_smi
+
+def getGPUStats(gpu = 0):
+	if device == "cuda":
+		nvidia_smi.nvmlInit()
+		handle = nvidia_smi.nvmlDeviceGetHandleByIndex(gpu)
+		info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
+		nvidia_smi.nvmlShutdown()
+		return info
+	else:
+		return {}
+
+def format_bytes(size):
+	# 2**10 = 1024
+	power = 2**10
+	n = 0
+	power_labels = {0 : '', 1: 'kB', 2: 'MB'}
+	while size > power:
+		if (n >= (len(power_labels) - 1)):
+			break;
+		else:
+			size /= power
+			n += 1
+
+	return str(round(size)) + power_labels[n]
 
 class Logger:
 	logdata = ""
@@ -106,7 +137,7 @@ tortoise_presets = {
 	'fast': {'label': 'Fast', 'num_autoregressive_samples': 96, 'diffusion_iterations': 80},
 	'standard': {'label': 'Standard', 'num_autoregressive_samples': 256, 'diffusion_iterations': 200},
 	'high_quality': {'label': 'High Quality', 'num_autoregressive_samples': 256, 'diffusion_iterations': 400},
-	'zefie_hq': {'label': "zefie's High Quality", 'num_autoregressive_samples': 512, 'diffusion_iterations': 400},
+	'zefie_hq': {'label': "zefie's High Quality", "num_autoregressive_samples": 512, "diffusion_iterations": 400},
 }
 
 # Query Coqui for it's TTS model list, mute to prevent dumping the list to console
@@ -137,7 +168,7 @@ coqui_voice_models.remove('tts_models/multilingual/multi-dataset/bark')
 coqui_voice_models.remove('tts_models/en/multi-dataset/tortoise-v2')
 
 # Scan bark /home/app/bark/assets/* for .npz files. You could add your own to /home/app/bark/custom/yourvoice.npz
-bark_voice_models = [item.replace("./bark/assets/prompts/","").replace(".npz","") for item in sorted(glob.glob('./bark/assets/**/*.npz', recursive=True))]
+bark_voice_models = [item.replace("./bark/assets/prompts/","").replace(".npz","") for item in sorted(glob.glob('./bark/assets/prompts/**/*.npz', recursive=True))]
 
 theme = gr.themes.Base(
     primary_hue="purple",
@@ -160,18 +191,21 @@ def strip_unicode(string):
     ascii_chars = set(ascii_letters + digits + punctuation) - {' ', '\t', '\n'}
     return ''.join([c for c in string if (ord(c) <= 127 and ord(c) not in (0xc0, 0xc1)) or c in ascii_chars])
 
+def gc_collect():
+	gc.collect()
+	if device == 'cuda':
+		torch.cuda.empty_cache()
+
 def unload_engines(keep):
-	global loaded_tts
+	global loaded_tts, globals
 	keys = []
 	for engine in loaded_tts.keys():
 		keys.append(engine)
 	for engine in keys:
-		if keep != engine:
+		if keep != engine and engine not in globals:
 			print('Unloading '+engine+'...')
 			del loaded_tts[engine]
-	gc.collect()
-	if device == 'cuda':
-		torch.cuda.empty_cache()
+	gc_collect()
 
 def optionSelected(option, options):
 	for opt in options:
@@ -200,15 +234,16 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 			audio = ifile.getnframes()
 			audio = ifile.readframes(audio)
 			audio = np.frombuffer(audio, dtype=np.int16)
+			del ifile, wave
 			return sr, audio
 		sys.stdin.seek(0)
 		speaktxt = strip_unicode(speaktxt)
 		os.environ["TTS_HOME"] = "./coqui/"
 		if engine not in loaded_tts:
+			unload_engines(engine)
 			progress(0.15, "Loading Coqui...")
 			print("Loading Coqui...")
 			from TTS.api import TTS as tts_api
-			unload_engines(engine)
 			loaded_tts[engine] = {}
 			loaded_tts[engine]['api'] = tts_api
 			loaded_tts[engine]['engine'] = loaded_tts[engine]['api']().to(device)
@@ -236,19 +271,23 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 			if len(wavs) > 0:
 				if loaded_tts[engine]['engine'].is_multi_lingual:
 					# multilingual, so send language and speaker
-					ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs, language="en")
+					if 'xtts' in model:
+						ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs, language=advanced_opts['language'], temperature=advanced_opts['temperature'], length_penalty=advanced_opts['length_penalty'], top_p=advanced_opts['top_p'], top_k=advanced_opts['top_k'], repetition_penalty=float(advanced_opts['repetition_penalty']), speed=advanced_opts['speed'])
+					else:
+						ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs, language=advanced_opts['language'])
 				else:
 					# not multilingual, just send speaker
 					ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs)
+			del wavs
 		else:
 			# no speaker
 			ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, sample_rate=sr, channels=channels, bit_depth=bit_depth)
-	if engine == "bark":
+	elif engine == "bark":
 		if engine not in loaded_tts:
+			unload_engines(engine)
 			progress(0.15, "Loading Bark...")
 			print("Loading Bark...")
 			import bark
-			unload_engines(engine)
 			loaded_tts[engine] = bark
 		progress(0.25, "Loaded Bark")
 		print("Loaded Bark")
@@ -256,12 +295,12 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		progress(0.50, "Generating...")
 		print("Generating...")
 		ttsgen = loaded_tts[engine].generate_audio(speaktxt, history_prompt="bark/assets/prompts/"+model+".npz")
-	if engine == "tortoise":
+	elif engine == "tortoise":
 		sr = 24000
 		if engine not in loaded_tts:
+			unload_engines(engine)
 			progress(0.15,"Loading TorToiSe...")
 			print("Loading TorToiSe...")
-			unload_engines(engine)
 			from tortoise import api, utils
 			loaded_tts[engine] = {}
 			loaded_tts[engine]['api'] = api
@@ -275,14 +314,15 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		print("Generating...")
 		tts = loaded_tts[engine]['api'].TextToSpeech(use_deepspeed=advanced_opts['use_deepspeed'], kv_cache=advanced_opts['kv_cache'], half=advanced_opts['half'], device=device)
 		pcm_audio = tts.tts(speaktxt, voice_samples=reference_clips, temperature=advanced_opts['temperature'], num_autoregressive_samples=advanced_opts['num_autoregressive_samples'], diffusion_iterations=advanced_opts['diffusion_iterations'], cond_free=advanced_opts['cond_free'], diffusion_temperature=advanced_opts['diffusion_temperature'])
+		del tts
 		progress(0.75, "Processing audio...")
 		print("Processing audio...")
 		audio = pcm_audio.detach().cpu().numpy()
-	if engine == "mars5":
+	elif engine == "mars5":
 		if engine not in loaded_tts:
+			unload_engines(engine)
 			progress(0.15, "Loading Camb.ai Mars5...")
 			print("Loading Camb.ai Mars5...")
-			unload_engines(engine)
 			from mars5.inference import Mars5TTS, InferenceConfig as config_class
 			loaded_tts[engine] = {}
 			loaded_tts[engine]['Mars5TTS'] = Mars5TTS
@@ -323,14 +363,15 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		progress(0.50, "Generating...")
 		print("Generating...")
 		ar_codes, output_audio = loaded_tts[engine]['api'].tts(speaktxt, wav, advanced_opts['transcription'], cfg=cfg)
+		del wav
 		progress(0.75, "Processing audio...")
 		print("Processing audio...")
 		audio = output_audio.detach().cpu().numpy()
-	if engine == "parler":
+	elif engine == "parler":
 		if engine not in loaded_tts:
+			unload_engines(engine)
 			progress(0.15, "Loading Parler...")
 			print("Loading Parler...")
-			unload_engines(engine)
 			from parler_tts import ParlerTTSForConditionalGeneration
 			from transformers import AutoTokenizer
 			loaded_tts[engine] = {}
@@ -363,6 +404,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 		progress(0.50, "Generating...")
 		print("Generating...")
 		generation = loaded_tts[engine]['api'].generate(**model_kwargs)
+		del tokenizer, description
 		progress(0.75, "Processing audio...")
 		print("Processing audio...")
 		audio = generation.cpu().numpy().squeeze()
@@ -377,6 +419,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 	return sr, audio
 
 def updateVoicesVisibility(engine, model, current_voice):
+	global loaded_tts
 	if (engine == 'coqui' and 'multilingual' in model) or engine == 'tortoise' or engine == 'mars5':
 		voices = getVoices(engine)
 		if current_voice != '':
@@ -390,28 +433,30 @@ def updateVoicesVisibility(engine, model, current_voice):
 			return gr.Dropdown(choices=voices, visible=True, value=voices[0][1]) # update and default selected (#1)
 	return gr.Dropdown(choices=[['','']], visible=False, value="") # Empty and hidden
 
-def updateModels(value):
-	if value == "bark":
+def updateInfo(engine):
+	if engine == "mars5":
+		return gr.CheckboxGroup(info="Mars5 prefers short (< max_prompt_dur seconds) speaker wavs.")
+	elif engine == "coqui":
+		return gr.CheckboxGroup(info="Coqui XTTS and Your TTS will use all wavs in a character's folder for cloning.")
+	elif engine == "parler":
+		return gr.CheckboxGroup(info="Parler uses textual descriptions to generate its voice.")
+	elif engine == "bark":
+		return gr.CheckboxGroup(info="Bark uses npz speaker models to generate its voice. You can add your own at /home/app/bark/assets/custom")
+	elif engine == "tortoise":
+		return gr.CheckboxGroup(info="TorToiSe will use all wavs in a character's folder for cloning.")
+
+def updateModels(engine):
+	if engine == "bark":
 		return gr.Dropdown(choices=bark_voice_models, value=bark_voice_models[0], label="TTS Model")
-	if value == "coqui":
+	elif engine == "coqui":
 		return gr.Dropdown(choices=coqui_voice_models, value=coqui_voice_models[0], label="TTS Model")
-	if value == "tortoise":
+	elif engine == "tortoise":
 		tortoise_pr = [[tortoise_presets[item]['label'],item] for item in tortoise_presets.keys()]
 		return gr.Dropdown(choices=tortoise_pr, value='standard', label="Preset")
-	if value == "mars5":
-		return gr.Dropdown(choices=['Camb-ai/mars5-tts'], value='Camb-ai/mars5-tts', label="TTS Model")
-	if value == "parler":
-		return gr.Dropdown(choices=['parler-tts/parler-tts-mini-v1', 'parler-tts/parler-tts-large-v1'], value='parler-tts/parler-tts-large-v1', label="TTS Model")
-
-def updateOpts(engine):
-	if engine == "tortoise":
-		updateAdvancedOpts(engine, tortoise_opts_comp.value, tortoise_temperature.value, tortoise_diffusion_temperature.value, tortoise_num_autoregressive_samples.value, tortoise_diffusion_iterations.value)
 	elif engine == "mars5":
-		updateAdvancedOpts(engine, mars5_transcription.value, mars5_bool.value, mars5_temperature.value, mars5_top_k.value, mars5_top_p.value, mars5_rep_penalty_window.value, mars5_freq_penalty.value, mars5_presence_penalty.value, mars5_max_prompt_dur.value)
+		return gr.Dropdown(choices=['Camb-ai/mars5-tts'], value='Camb-ai/mars5-tts', label="TTS Model")
 	elif engine == "parler":
-		updateAdvancedOpts(engine, parler_options.value, parler_description.value, parler_attn_implementation.value, parler_temperature.value)
-	else:
-		updateAdvancedOpts(engine)
+		return gr.Dropdown(choices=['parler-tts/parler-tts-mini-v1', 'parler-tts/parler-tts-large-v1'], value='parler-tts/parler-tts-large-v1', label="TTS Model")
 
 def updateAdvancedVisiblity(engine):
 	if engine == "coqui":
@@ -421,7 +466,7 @@ def updateAdvancedVisiblity(engine):
 			mars5_opts: gr.Group(visible=False),
 			parler_opts: gr.Group(visible=False)
 		}
-	if engine == "tortoise":
+	elif engine == "tortoise":
 		return {
 			coqui_opts: gr.Group(visible=False),
 			tortoise_opts: gr.Group(visible=True),
@@ -477,29 +522,39 @@ def updateAdvancedOpts(engine, *args):
 		}
 	elif engine == "mars5":
 		advanced_opts = {
-			'transcription': args[0],
-			'deep_clone': ('deep_clone' in args[1]),
-			'use_kv_cache': ('use_kv_cache' in args[1]),
-			'temperature': args[2],
-			'top_k': args[3],
-			'top_p': args[4],
-			'rep_penalty_window': args[5],
-			'freq_penalty': args[6],
-			'presence_penalty': args[7],
-			'max_prompt_dur': args[8]
+			'transcription': args[5],
+			'deep_clone': ('deep_clone' in args[6]),
+			'use_kv_cache': ('use_kv_cache' in args[6]),
+			'temperature': args[7],
+			'top_k': args[8],
+			'top_p': args[9],
+			'rep_penalty_window': args[10],
+			'freq_penalty': args[11],
+			'presence_penalty': args[12],
+			'max_prompt_dur': args[13]
 		}
 	elif engine == "parler":
 		compile_mode, inc_attn_mask = [False,False]
-		if 'compile_mode' in args[0]:
+		if 'compile_mode' in args[14]:
 			compile_mode = True
-		if 'inc_attn_mask' in args[0]:
+		if 'inc_attn_mask' in args[14]:
 			inc_attn_mask = True
-			advanced_opts = {
-			'description': args[1],
-			'attn_implementation': args[2],
+		advanced_opts = {
+			'description': args[15],
+			'attn_implementation': args[16],
 			'compile_mode': 'default' if compile_mode else False,
 			'inc_attn_mask': inc_attn_mask,
-			'temperature': args[3]
+			'temperature': args[17]
+		}
+	elif engine == "coqui":
+		advanced_opts = {
+			'language': args[18],
+			'temperature': args[19],
+			'length_penalty': args[20],
+			'top_p': args[21],
+			'top_k': args[22],
+			'speed': args[23],
+			'repetition_penalty': args[24]
 		}
 	else:
 		advanced_opts = {}
@@ -507,11 +562,11 @@ def updateAdvancedOpts(engine, *args):
 def voiceChanged(engine, voice):
 	global loaded_tts
 	# Read .txt file if it exists and toggle Deep Clone accordingly
-	m5_bool_value = mars5_bool.value.copy()
-	out = ''
 	if voice:
 		loaded_tts['voice'] = voice
 	if engine == "mars5":
+		out = ''
+		m5_bool_value = mars5_bool.value.copy()
 		text = voice.replace(".wav",".txt")
 		if os.path.isfile(text):
 			f = open(text,"r");
@@ -532,8 +587,8 @@ def voiceChanged(engine, voice):
 	}
 
 def presetChanged(engine, model):
-	tortoise_opts_value = tortoise_opts_comp.value.copy()
 	if engine == "tortoise":
+		tortoise_opts_value = tortoise_opts_comp.value.copy()
 		if 'cond_free' not in tortoise_presets[model]:
 			# True
 			if 'cond_free' not in tortoise_opts_value:
@@ -542,16 +597,123 @@ def presetChanged(engine, model):
 			# False
 			if 'cond_free' in tortoise_opts_value:
 				tortoise_opts_value.remove('cond_free')
-			return {
+		return {
 			tortoise_num_autoregressive_samples: gr.Slider(value=tortoise_presets[model]['num_autoregressive_samples']),
 			tortoise_diffusion_iterations: gr.Slider(value=tortoise_presets[model]['diffusion_iterations']),
 			tortoise_opts_comp: gr.CheckboxGroup(value=tortoise_opts_value),
+			xtts_licence: gr.Checkbox(),
+			xtts_temperature: gr.Slider(),
+			xtts_top_p: gr.Slider(),
+			xtts_length_penalty: gr.Slider(),
+			xtts_top_k: gr.Slider(),
+			xtts_language: gr.Dropdown(),
+			coqui_opts: gr.Group()
 		}
+	elif engine == "coqui":
+		if 'xtts' in model:
+			return {
+				tortoise_num_autoregressive_samples: gr.Slider(),
+				tortoise_diffusion_iterations: gr.Slider(),
+				tortoise_opts_comp: gr.CheckboxGroup(),
+				xtts_licence: gr.Checkbox(visible=True),
+				xtts_temperature: gr.Slider(visible=True),
+				xtts_top_p: gr.Slider(visible=True),
+				xtts_length_penalty: gr.Slider(visible=True),
+				xtts_top_k: gr.Slider(visible=True),
+				xtts_speed: gr.Slider(visible=True),
+				xtts_repetition_penalty: gr.Slider(visible=True),
+				xtts_language: gr.Dropdown(visible=True),
+				coqui_opts: gr.Group(visible=True)
+			}
+		elif 'multilingual' in model:
+			return {
+				tortoise_num_autoregressive_samples: gr.Slider(),
+				tortoise_diffusion_iterations: gr.Slider(),
+				tortoise_opts_comp: gr.CheckboxGroup(),
+				xtts_licence: gr.Checkbox(visible=False),
+				xtts_temperature: gr.Slider(visible=False),
+				xtts_top_p: gr.Slider(visible=False),
+				xtts_length_penalty: gr.Slider(visible=False),
+				xtts_top_k: gr.Slider(visible=False),
+				xtts_speed: gr.Slider(visible=False),
+				xtts_repetition_penalty: gr.Slider(visible=False),
+				xtts_language: gr.Dropdown(visible=True),
+				coqui_opts: gr.Group(visible=True)
+			}
+		else:
+			return {
+				tortoise_num_autoregressive_samples: gr.Slider(),
+				tortoise_diffusion_iterations: gr.Slider(),
+				tortoise_opts_comp: gr.CheckboxGroup(),
+				xtts_licence: gr.Checkbox(visible=False),
+				xtts_temperature: gr.Slider(visible=False),
+				xtts_top_p: gr.Slider(visible=False),
+				xtts_length_penalty: gr.Slider(visible=False),
+				xtts_top_k: gr.Slider(visible=False),
+				xtts_speed: gr.Slider(visible=False),
+				xtts_repetition_penalty: gr.Slider(visible=False),
+				xtts_language: gr.Dropdown(visible=False),
+				coqui_opts: gr.Group(visible=False)
+			}
 	return {
 		tortoise_num_autoregressive_samples: gr.Slider(),
 		tortoise_diffusion_iterations: gr.Slider(),
 		tortoise_opts_comp: gr.CheckboxGroup(),
+		xtts_licence: gr.Checkbox(),
+		xtts_temperature: gr.Slider(),
+		xtts_top_p: gr.Slider(),
+		xtts_length_penalty: gr.Slider(),
+		xtts_top_k: gr.Slider(),
+		xtts_speed: gr.Slider(),
+		xtts_repetition_penalty: gr.Slider(),
+		xtts_language: gr.Dropdown(),
+		coqui_opts: gr.Group()
 	}
+
+def returnMe(value):
+	return value
+
+def startTimer(seconds):
+	return gr.Timer(active=True,value=seconds)
+
+def cancelTimer():
+	return gr.Timer(active=False)
+
+def percentage(part, whole):
+	return 100 * float(part)/float(whole)
+
+def getColorByPercent(percent):
+	if percent >= 90:
+		colors = ['red', 'darkred']
+	elif percent >= 75:
+		colors = ['orange', 'darkorange']
+	elif percent >= 50:
+		colors = ['yellow', 'gold']
+	else:
+		colors = ['green','darkgreen']
+	return colors
+
+def updateSysInfo():
+	out, out2 = ["",""]
+	if device == "cuda":
+		gpuinfo = getGPUStats()
+		percent = percentage(gpuinfo.used,gpuinfo.total);
+		colors = getColorByPercent(percent)
+
+		out += "<strong>GPU RAM</strong>: "
+		out += format_bytes(gpuinfo.used)+"/"+format_bytes(gpuinfo.total)
+		out += "<div style='width: 300px; background-color: "+colors[0]+"; text-align: right'>"
+		out += "<div style='width: "+str(percent)+"%; text-align: left; background-color: "+colors[1]+";'> &nbsp;</div></div>"
+		del gpuinfo
+	meminfo = psutil.virtual_memory()
+	percent = percentage(meminfo.used,meminfo.total);
+	colors = getColorByPercent(percent)
+	out2 += "<strong>SYS RAM</strong>: "
+	out2 += format_bytes(meminfo.used)+"/"+format_bytes(meminfo.total)
+	out2 += "<div style='width: 300px; background-color: "+colors[0]+"; text-align: right'>"
+	out2 += "<div style='width: "+str(percent)+"%; text-align: left; background-color: "+colors[1]+";'> &nbsp;</div></div>"
+	del meminfo
+	return out2, out
 
 with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_style) as demo:
 	def getVoices(engine):
@@ -567,9 +729,12 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 			wavs.extend([[item.replace('./tortoise-tts/tortoise/voices','tortoise'),item] for item in sorted(glob.glob('./tortoise-tts/tortoise/voices/*'))])
 		return wavs
 
+	def previewAudio(file):
+		return gr.Audio(label=file,type="filepath",value=file)
+
 	def read_log():
 		sys.stdout.flush()
-		return sys.stdout.read(), gr.Button();
+		return sys.stdout.read()
 
 	def toggleAcceptance(value):
 		sys.stdin.seek(0)
@@ -583,108 +748,134 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 
 	voices = getVoices("coqui")
 	voice = voices[0][1]
-	with gr.Tab("TTS"):
-		with gr.Group() as main_group:
-			with gr.Row():
-				gr.Markdown("# <p style=\"text-align: center;\">zefie's Multi-TTS v"+str(version)+"</p>")
-			with gr.Row():
-				with gr.Column():
-					tts_select = gr.Radio(tts_engines, type="value", value="coqui", label="TTS Engine")
-					model_select = gr.Dropdown(coqui_voice_models, type="value", value=coqui_voice_models[0], label="TTS Model")
-					voice_select = gr.Dropdown(choices=voices, value=voice, type="value", visible=True, label="Voice Cloning", info="Place your custom voices in /home/app/srcwav/Desired Name/File1.wav, etc")
-					speak_text = gr.Textbox(value="Welcome to the multi text to speech generator", label="Text to speak", lines=3)
-				with gr.Column():
-					audioout = gr.Audio(show_download_button=True, label="Generated Audio", interactive=False, scale=4)
-			with gr.Row():
-				submit_btn = gr.Button("Submit", variant="primary")
+	with gr.Row():
+		gr.Markdown("# <p style=\"text-align: center;\">zefie's Multi-TTS v"+str(version)+"</p>")
+#	with gr.Row():
+#		with gr.Column():
+#			sys_info = gr.HTML()
+#		with gr.Column():
+#			gpu_info = gr.HTML()
+#		sys_info_timer = gr.Timer(value=3,active=True)
+	with gr.Row():
+		with gr.Tab("TTS") as tab_tts:
+			with gr.Group() as main_group:
+				with gr.Row():
+					with gr.Column():
+						tts_select = gr.Radio(tts_engines, type="value", value="coqui", label="TTS Engine", info="Coqui XTTS and Your TTS will use all wavs in a character's folder for cloning")
+						model_select = gr.Dropdown(coqui_voice_models, type="value", value=coqui_voice_models[0], label="TTS Model")
+						voice_select = gr.Dropdown(choices=voices, value=voice, type="value", visible=True, label="Voice Cloning", info="Place your custom voices in /home/app/srcwav/Desired Name/File1.wav, etc")
+						speak_text = gr.Textbox(value="Welcome to the multi text to speech generator", label="Text to speak", lines=3)
+					with gr.Column():
+						audioout = gr.Audio(show_download_button=True, label="Generated Audio", type='numpy', interactive=False, scale=4)
+				with gr.Row():
+					submit_btn = gr.Button("Generate", variant="primary")
 
-		with gr.Group() as coqui_opts:
+			with gr.Group() as coqui_opts:
+				with gr.Row():
+					gr.HTML("<p style=\"padding-left: 10px\">Coqui Advanced Options - Read the <a href='https://coqui.ai/cpml' target='_blank'>Coqui Public Model License (CPML)</a></p>")
+				with gr.Row():
+					xtts_language = gr.Dropdown(choices=["en","es","fr","de","it","pt","pl","tr","ru","nl","cs","ar","zh-cn","hu","ko","ja","hi"], value="en", label="Language")
+					xtts_licence = gr.Checkbox(label="I agree to the CPML", value=False, info="Must be checked before using XTTS models.")
+				with gr.Row():
+					with gr.Column():
+						xtts_temperature = gr.Slider(value=0.85, minimum=0, maximum=3, label="Temperature", info="Temperature for the autoregressive model inference. Larger values makes predictions more creative sacrificing stability.")
+						xtts_repetition_penalty = gr.Slider(value=2, maximum=5, minimum=0, label="Repetition Penalty", info='A penalty that prevents the autoregressive decoder from repeating itself during decoding. Can be used to reduce the incidence of long silences or "uhhhhhhs", etc.')
+						xtts_top_p = gr.Slider(value=0.85, minimum=0, maximum=3, label="top_p", info="If < 1, only the smallest set of most probable tokens with probabilities that add up to top_p or higher are kept.")
+					with gr.Column():
+						xtts_speed = gr.Slider(value=1, minimum=0.1, maximum=3, label="Speed", info="The speed rate of the generated audio. (can produce artifacts if far from 1.0)")
+						xtts_length_penalty = gr.Slider(value=1, minimum=-1, maximum=1, label="Length Penalty", info="Exponential penalty to the length that is used with beam-based generation. length_penalty > 0.0 promotes longer sequences, while length_penalty < 0.0 encourages shorter sequences.")
+						xtts_top_k = gr.Slider(value=50, minimum=0, maximum=100, label="top_k", info="Lower values mean the decoder produces more \"likely\" (aka boring) outputs.")
+			with gr.Group(visible=False) as tortoise_opts:
+				with gr.Row():
+					gr.Markdown("<p style=\"padding-left: 10px\">Tortoise Advanced Options</p>")
+				with gr.Row():
+					tortoise_opts_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],['Conditioning-Free Diffusion','cond_free'],["fp16 (half)","half"]], value=['use_deepspeed','kv_cache','cond_free'])
+				with gr.Row():
+					tortoise_temperature = gr.Slider(value=0.8, minimum=0, maximum=3, label="Temperature", info="The softmax temperature of the autoregressive model.")
+					tortoise_diffusion_temperature = gr.Slider(value=1, minimum=0, maximum=1, label="Difussion Temperature", info="Controls the variance of the noise fed into the diffusion model. Values at 0 are the \"mean\" prediction of the diffusion network and will sound bland and smeared")
+				with gr.Row():
+					tortoise_num_autoregressive_samples = gr.Slider(value=256, minimum=16, maximum=2048, label="# of Autoregressive Samples", info="Number of samples taken from the autoregressive model, all of which are filtered using CLVP. As Tortoise is a probabilistic model, more samples means a higher probability of creating something \"great\".")
+					tortoise_diffusion_iterations = gr.Slider(value=200, minimum=30, maximum=4000, label="Diffusion Iterations", info="Number of diffusion steps to perform. More steps means the network has more chances to iteratively refine the output, which should theoretically mean a higher quality output. Generally a value above 250 is not noticeably better, however.")
+			with gr.Group(visible=False) as mars5_opts:
+				with gr.Row():
+					gr.Markdown("<p style=\"padding-left: 10px\">Camb.ai Mars5 Advanced Options</p>")
+				with gr.Row():
+					mars5_transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription 	(Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
+				with gr.Row():
+					mars5_bool = gr.CheckboxGroup([["Deep Clone (requires transcription)","deep_clone"],["Use KV Cache","use_kv_cache"]], value=['use_kv_cache'])
+					mars5_temperature = gr.Slider(value=0.7, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
+				with gr.Row():
+					mars5_top_k = gr.Slider(value=200,minimum=0,maximum=1000, label="top_k", info="used for sampling, keeps tokens with the highest probabilities until a certain number (top_k) is reached")
+					mars5_rep_penalty_window = gr.Slider(value=80,minimum=0,maximum=200,label="rep_penalty_window",info="how far in the past to consider when penalizing repetitions. default equates to 5s")
+				with gr.Row():
+					mars5_top_p = gr.Slider(value=0.2,minimum=0,maximum=1, label="top_p",info="used for sampling, keep the top tokens with cumulative probability >= top_p")
+					mars5_freq_penalty = gr.Slider(value=3,minimum=0,maximum=100,label="freq_penalty",info="increasing it would penalize the model more for reptitions")
+				with gr.Row():
+					mars5_max_prompt_dur = gr.Slider(value=12,minimum=1,maximum=30,label="max_prompt_dur",info="maximum length prompt is allowed, in seconds")
+					mars5_presence_penalty = gr.Slider(value=0.4,minimum=0,maximum=1,label="presence_penalty",info="increasing it would increase token diversity")
+			with gr.Group(visible=False) as parler_opts:
+				with gr.Row():
+					gr.Markdown("<p style=\"padding-left: 10px\">Parler Advanced Options</p>")
+				with gr.Row():
+					parler_description = gr.Textbox("A female speaker delivers a slightly expressive and animated speech with a moderate speed and pitch. The recording is of very high quality, with the speaker's voice sounding clear and very close up.", lines=3, placeholder="Type your description here, it should describe how you would like the voice to sound",label="Description",info="Describe how you would like the voice to sound.")
+				with gr.Row():
+					parler_temperature = gr.Slider(value=1, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
+				with gr.Row():
+					parler_options = gr.CheckboxGroup([['Compile Mode','compile_mode'],['Include Attn Mask','inc_attn_mask']])
+					parler_attn_implementation = gr.Dropdown(['eager','sdpa'],value="eager",label="Attention Implementation")
+		with gr.Tab("Browser") as tab_browser:
 			with gr.Row():
-				gr.HTML("<p style=\"padding-left: 10px\">Coqui Advanced Options - Read the <a href='https://coqui.ai/cpml' target='_blank'>Coqui Public Model License (CPML)</a></p>")
+				with gr.Column():
+					wavbrowser = gr.FileExplorer(
+						scale=1,
+						label="Audio Browser",
+						glob="**/**/*.wav",
+						value='sample/Ava/ava_short.wav',
+						file_count="single",
+						root_dir="/home/app",
+						elem_id="file",
+					)
+				with gr.Column():
+					audiopreview = gr.Audio(show_download_button=True, label="/home/app/sample/Ava/ava_short.wav", interactive=False, scale=1, type="filepath", value="/home/app/sample/Ava/ava_short.wav")
+
+		with gr.Tab("Logs") as tab_logs:
 			with gr.Row():
-				xtts_licence = gr.Checkbox(label="I agree to the CPML", value=False, info="Must be checked before using XTTS models.")
-		with gr.Group(visible=False) as tortoise_opts:
+				log_timer = gr.Timer(active=False)
+				fake_console_logs = gr.Textbox(visible=False)
+				console_logs = gr.HTML(elem_classes="bark_console")
 			with gr.Row():
-				gr.Markdown("<p style=\"padding-left: 10px\">Tortoise Advanced Options</p>")
+				log_refresh_rate = gr.Slider(label="Log Refresh Rate (seconds)", value=3, minimum=1, maximum=10)
 			with gr.Row():
-				tortoise_opts_comp = gr.CheckboxGroup([["Use Deepspeed","use_deepspeed"],["Use KV Cache","kv_cache"],['Conditioning-Free Diffusion','cond_free'],["fp16 (half)","half"]], value=['use_deepspeed','kv_cache','cond_free'])
-			with gr.Row():
-				tortoise_temperature = gr.Slider(value=0.8, minimum=0, maximum=3, label="Temperature", info="The softmax temperature of the autoregressive model.")
-				tortoise_diffusion_temperature = gr.Slider(value=1, minimum=0, maximum=1, label="Difussion Temperature", info="Controls the variance of the noise fed into the diffusion model. Values at 0 are the \"mean\" prediction of the diffusion network and will sound bland and smeared")
-			with gr.Row():
-				tortoise_num_autoregressive_samples = gr.Slider(value=256, minimum=16, maximum=2048, label="# of Autoregressive Samples", info="Number of samples taken from the autoregressive model, all of which are filtered using CLVP. As Tortoise is a probabilistic model, more samples means a higher probability of creating something \"great\".")
-				tortoise_diffusion_iterations = gr.Slider(value=200, minimum=30, maximum=4000, label="Diffusion Iterations", info="Number of diffusion steps to perform. More steps means the network has more chances to iteratively refine the output, which should theoretically mean a higher quality output. Generally a value above 250 is not noticeably better, however.")
-		with gr.Group(visible=False) as mars5_opts:
-			with gr.Row():
-				gr.Markdown("<p style=\"padding-left: 10px\">Camb.ai Mars5 Advanced Options</p>")
-			with gr.Row():
-				mars5_transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription 	(Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
-			with gr.Row():
-				mars5_bool = gr.CheckboxGroup([["Deep Clone (requires transcription)","deep_clone"],["Use KV Cache","use_kv_cache"]], value=['use_kv_cache'])
-				mars5_temperature = gr.Slider(value=0.7, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
-			with gr.Row():
-				mars5_top_k = gr.Slider(value=200,minimum=0,maximum=1000, label="top_k", info="used for sampling, keeps tokens with the highest probabilities until a certain number (top_k) is reached")
-				mars5_rep_penalty_window = gr.Slider(value=80,minimum=0,maximum=200,label="rep_penalty_window",info="how far in the past to consider when penalizing repetitions. default equates to 5s")
-			with gr.Row():
-				mars5_top_p = gr.Slider(value=0.2,minimum=0,maximum=1, label="top_p",info="used for sampling, keep the top tokens with cumulative probability >= top_p")
-				mars5_freq_penalty = gr.Slider(value=3,minimum=0,maximum=100,label="freq_penalty",info="increasing it would penalize the model more for reptitions")
-			with gr.Row():
-				mars5_max_prompt_dur = gr.Slider(value=12,minimum=1,maximum=30,label="max_prompt_dur",info="maximum length prompt is allowed, in seconds")
-				mars5_presence_penalty = gr.Slider(value=0.4,minimum=0,maximum=1,label="presence_penalty",info="increasing it would increase token diversity")
-		with gr.Group(visible=False) as parler_opts:
-			with gr.Row():
-				gr.Markdown("<p style=\"padding-left: 10px\">Parler Advanced Options</p>")
-			with gr.Row():
-				parler_description = gr.Textbox("A female speaker delivers a slightly expressive and animated speech with a moderate speed and pitch. The recording is of very high quality, with the speaker's voice sounding clear and very close up.", lines=3, placeholder="Type your description here, it should describe how you would like the voice to sound",label="Description",info="Describe how you would like the voice to sound.")
-			with gr.Row():
-				parler_temperature = gr.Slider(value=1, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
-			with gr.Row():
-				parler_options = gr.CheckboxGroup([['Compile Mode','compile_mode'],['Include Attn Mask','inc_attn_mask']])
-				parler_attn_implementation = gr.Dropdown(['eager','sdpa'],value="eager",label="Attention Implementation")
-	with gr.Tab("Logs"):
-		with gr.Row():
-			console_logs = gr.HTML(elem_classes="bark_console")
-		with gr.Row():
-			clear_button = gr.Button("Clear Log")
-			clear_button.click(clear_log)
+				clear_button = gr.Button("Clear Log")
+				clear_button.click(clear_log)
 
 	groups_group = {'fn': updateAdvancedVisiblity, 'inputs': tts_select, "outputs": [coqui_opts, tortoise_opts, mars5_opts, parler_opts]}
 	voices_group = {'fn': updateVoicesVisibility, 'inputs': [tts_select, model_select, voice_select], 'outputs': voice_select}
-	tortoise_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations]}
-	mars5_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur]}
-	parler_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, parler_options, parler_description, parler_attn_implementation,  parler_temperature]}
-	voiceChanged_group = {'fn': voiceChanged, 'inputs': [tts_select, voice_select], 'outputs': [mars5_transcription, mars5_bool]}
-	presetChanged_group = {'fn': presetChanged, 'inputs': [tts_select, model_select], 'outputs': [tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, tortoise_opts_comp]}
+	voiceChanged_group = {'fn': voiceChanged, 'inputs': [tts_select, voice_select], 'outputs': [mars5_transcription, mars5_bool], 'show_progress': False}
+	presetChanged_group = {'fn': presetChanged, 'inputs': [tts_select, model_select], 'outputs': [tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, tortoise_opts_comp, xtts_licence, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty, xtts_language, coqui_opts], 'show_progress': False}
+	opts_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur, parler_options, parler_description, parler_attn_implementation, parler_temperature, xtts_language, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty]}
 
 
+	log_timer.tick(fn=read_log, inputs=None, outputs=fake_console_logs)
+	tab_logs.select(fn=read_log, inputs=None, outputs=fake_console_logs)
+	tab_logs.select(fn=startTimer, inputs=log_refresh_rate, outputs=log_timer)
+	tab_tts.select(fn=cancelTimer, outputs=log_timer)
+	tab_browser.select(fn=cancelTimer, outputs=log_timer)
+	log_refresh_rate.change(fn=startTimer, inputs=log_refresh_rate, outputs=log_timer)
+	wavbrowser.change(fn=previewAudio, inputs=wavbrowser, outputs=audiopreview)
 	xtts_licence.change(toggleAcceptance, xtts_licence)
-	submit_btn.click(generate_tts, [tts_select, model_select, voice_select, speak_text], audioout)
-	tts_select.change(updateModels,tts_select,model_select)
+	submit_btn.click(**opts_group).then(generate_tts, [tts_select, model_select, voice_select, speak_text], audioout)
+	tts_select.change(updateModels, tts_select, model_select)
+	tts_select.change(updateInfo, tts_select, tts_select, show_progress=False)
 	tts_select.change(**groups_group)
-	mars5_bool.change(**mars5_group)
-	mars5_temperature.change(**mars5_group)
-	mars5_top_k.change(**mars5_group)
-	mars5_top_p.change(**mars5_group)
-	mars5_rep_penalty_window.change(**mars5_group)
-	mars5_freq_penalty.change(**mars5_group)
-	mars5_presence_penalty.change(**mars5_group)
-	mars5_max_prompt_dur.change(**mars5_group)
-	mars5_transcription.change(**mars5_group)
-	tortoise_opts_comp.change(**tortoise_group)
-	tortoise_temperature.change(**tortoise_group)
-	tortoise_diffusion_temperature.change(**tortoise_group)
-	tortoise_num_autoregressive_samples.change(**tortoise_group)
-	tortoise_diffusion_iterations.change(**tortoise_group)
-	parler_description.change(**parler_group)
-	parler_attn_implementation.change(**parler_group)
-	parler_options.change(**parler_group)
-	parler_temperature.change(**parler_group)
 	voice_select.change(**voiceChanged_group)
 	model_select.change(**voiceChanged_group)
 	model_select.change(**presetChanged_group)
 	model_select.change(**voices_group)
-	tts_select.change(updateOpts, tts_select)
-	demo.load(read_log, None, console_logs, every=2)
+	fake_console_logs.change(returnMe, fake_console_logs, console_logs, show_progress=False)
+	gc_timer = gr.Timer(value=10, active=True)
+	gc_timer.tick(fn=gc_collect)
+#	sys_info_timer.tick(fn=updateSysInfo, outputs=[sys_info, gpu_info], show_progress=False)
 
 if __name__ == "__main__":
 	demo.queue().launch(server_name="0.0.0.0")
