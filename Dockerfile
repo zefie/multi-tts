@@ -31,9 +31,10 @@ RUN mkdir -p /home/app/coqui && \
 
 COPY ./data/tortoise-tts /home/app/tortoise-tts
 COPY ./data/parler-tts /home/app/parler-tts
+COPY ./data/OpenVoice /home/app/OpenVoice
 
 RUN --mount=type=cache,target=/root/.cache/pip cd /home/app && \
-	pip install ./tortoise-tts ./parler-tts nvidia-ml-py3
+	pip install ./OpenVoice ./tortoise-tts ./parler-tts nvidia-ml-py3
 
 RUN groupadd app && useradd -d /home/app -g app -G users app && chown app:app -R /home/app
 

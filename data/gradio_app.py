@@ -276,7 +276,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 				from TTS.api import TTS as tts_api
 				loaded_tts[engine] = {
 					'api': tts_api,
-					'engine': loaded_tts[engine]['api']().to(device),
+					'engine': tts_api().to(device),
 					'model': None
 				}
 				progress(0.25,"Loaded Coqui")
@@ -752,6 +752,7 @@ def presetChanged(engine, model):
 			xtts_length_penalty: gr.Slider(),
 			xtts_top_k: gr.Slider(),
 			xtts_language: gr.Dropdown(),
+			xtts_deepspeed: gr.Checkbox(),
 			coqui_opts: gr.Group()
 		}
 	elif engine == "coqui":
@@ -815,6 +816,7 @@ def presetChanged(engine, model):
 		xtts_speed: gr.Slider(),
 		xtts_repetition_penalty: gr.Slider(),
 		xtts_language: gr.Dropdown(),
+		xtts_deepspeed: gr.Checkbox(),
 		coqui_opts: gr.Group()
 	}
 
@@ -1007,7 +1009,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 	groups_group = {'fn': updateAdvancedVisiblity, 'inputs': tts_select, "outputs": [coqui_opts, openvoice_opts, tortoise_opts, mars5_opts, parler_opts]}
 	voices_group = {'fn': updateVoicesVisibility, 'inputs': [tts_select, model_select, voice_select], 'outputs': voice_select}
 	voiceChanged_group = {'fn': voiceChanged, 'inputs': [tts_select, voice_select], 'outputs': [mars5_transcription, mars5_bool], 'show_progress': False}
-	presetChanged_group = {'fn': presetChanged, 'inputs': [tts_select, model_select], 'outputs': [tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, tortoise_opts_comp, xtts_licence, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty, xtts_language, coqui_opts], 'show_progress': False}
+	presetChanged_group = {'fn': presetChanged, 'inputs': [tts_select, model_select], 'outputs': [tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, tortoise_opts_comp, xtts_licence, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty, xtts_language, xtts_deepspeed, coqui_opts], 'show_progress': False}
 	opts_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur, parler_options, parler_description, parler_attn_implementation, parler_temperature, xtts_language, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty, xtts_deepspeed, openvoice_speaker]}
 
 	log_timer.tick(fn=read_log, inputs=None, outputs=fake_console_logs)
