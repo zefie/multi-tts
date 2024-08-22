@@ -273,13 +273,13 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 				}
 				progress(0.25,"Loaded Coqui")
 				print("Loaded Coqui")
-		del tts_api
+			del tts_api
 
 		if loaded_tts[engine]['model'] != model:
 			progress(0.30,"Loading model...")
 			print("Loading model...")
 			if engine == "coqui_xtts":
-				tts_obj['api']().download_model_by_name(model_name=xtts_model)
+				loaded_tts[engine]['api']().download_model_by_name(model_name=model)
 				xtts_checkpoint_dir =  os.environ["TTS_HOME"] + "tts/"+model.replace("/","--")+"/"
 				xtts_checkpoint = xtts_checkpoint_dir+"model.pth"
 				xtts_config = xtts_checkpoint_dir+"config.json"
