@@ -2,3 +2,4 @@ srcwav/*
 runit
 buildit
 !srcwav/.gitkeep
+data/bark/__pycache__/*

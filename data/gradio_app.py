@@ -16,7 +16,7 @@ globals = ['voice']
 for f in globals:
 	loaded_tts[f] = None
 
-version = 20240817
+version = 20240822
 
 paths = [
 	'/home/app/.cache/coqui',
@@ -87,18 +87,18 @@ class Logger:
 sys.stdin = io.StringIO(f"n\n")
 
 sys.stdout = io.TextIOWrapper(
-    sys.stdout.buffer,
-    encoding="utf-8",
-    errors="replace",
-    newline="",
-    line_buffering=True,
+	sys.stdout.buffer,
+	encoding="utf-8",
+	errors="replace",
+	newline="",
+	line_buffering=True,
 )
 sys.stderr = io.TextIOWrapper(
-    sys.stderr.buffer,
-    encoding="utf-8",
-    errors="replace",
-    newline="",
-    line_buffering=True,
+	sys.stderr.buffer,
+	encoding="utf-8",
+	errors="replace",
+	newline="",
+	line_buffering=True,
 )
 
 sys.stdout = Logger(sys.stdout)
@@ -116,9 +116,9 @@ def mute(full = False):
 		sys.stderr = f
 
 def unmute():
-    # Unmutes stdout and stderr
-    sys.stdout = stdout
-    sys.stderr = stderr
+	# Unmutes stdout and stderr
+	sys.stdout = stdout
+	sys.stderr = stderr
 
 advanced_opts={}
 
@@ -150,6 +150,10 @@ for model in manager.list_models():
 unmute()
 
 css_style = """
+.minheight {
+	min-height: 86px;
+}
+
 .bark_console {
 	font: 1.3rem Inconsolata, monospace;
 	white-space: pre;
@@ -171,25 +175,25 @@ coqui_voice_models.remove('tts_models/en/multi-dataset/tortoise-v2')
 bark_voice_models = [item.replace("./bark/assets/prompts/","").replace(".npz","") for item in sorted(glob.glob('./bark/assets/prompts/**/*.npz', recursive=True))]
 
 theme = gr.themes.Base(
-    primary_hue="purple",
-    secondary_hue="purple",
-    neutral_hue="zinc",
+	primary_hue="purple",
+	secondary_hue="purple",
+	neutral_hue="zinc",
 )
 
 def getSampleRate(model):
-    if model == coqui_voice_models[2]:
-        return 16000
-    elif model == coqui_voice_models[0] or model == coqui_voice_models[1]:
-        return 24000
-    elif model == coqui_voice_models[3]:
-        return 48000
-    else:
-        return 22050
+	if model == coqui_voice_models[2]:
+		return 16000
+	elif model == coqui_voice_models[0] or model == coqui_voice_models[1]:
+		return 24000
+	elif model == coqui_voice_models[3]:
+		return 48000
+	else:
+		return 22050
 
 def strip_unicode(string):
-    """Remove non-ASCII characters from a string."""
-    ascii_chars = set(ascii_letters + digits + punctuation) - {' ', '\t', '\n'}
-    return ''.join([c for c in string if (ord(c) <= 127 and ord(c) not in (0xc0, 0xc1)) or c in ascii_chars])
+	"""Remove non-ASCII characters from a string."""
+	ascii_chars = set(ascii_letters + digits + punctuation) - {' ', '\t', '\n'}
+	return ''.join([c for c in string if (ord(c) <= 127 and ord(c) not in (0xc0, 0xc1)) or c in ascii_chars])
 
 def gc_collect():
 	gc.collect()
@@ -226,62 +230,114 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 	if engine == "coqui":
 		sr = getSampleRate(model)
 		sys.stdin.seek(0)
-		if sys.stdin.read() != f"y\n" and 'xtts' in model:
-			gr.Warning("Please agree to the Coqui Public Model License (CPML) before using XTTS models.")
-			print("Please agree to the Coqui Public Model License (CPML) before using XTTS models.")
-			import wave
-			ifile = wave.open("/home/app/coqui/cpml.wav")
-			audio = ifile.getnframes()
-			audio = ifile.readframes(audio)
-			audio = np.frombuffer(audio, dtype=np.int16)
-			del ifile, wave
-			return sr, audio
+		if 'xtts' in model:
+			engine = "coqui_xtts"
+			if sys.stdin.read() != f"y\n":
+				gr.Warning("Please agree to the Coqui Public Model License (CPML) before using XTTS models.")
+				print("Please agree to the Coqui Public Model License (CPML) before using XTTS models.")
+				import wave
+				ifile = wave.open("/home/app/coqui/cpml.wav")
+				audio = ifile.getnframes()
+				audio = ifile.readframes(audio)
+				audio = np.frombuffer(audio, dtype=np.int16)
+				del ifile, wave
+				return sr, audio
 		sys.stdin.seek(0)
 		speaktxt = strip_unicode(speaktxt)
 		os.environ["TTS_HOME"] = "./coqui/"
 		if engine not in loaded_tts:
 			unload_engines(engine)
-			progress(0.15, "Loading Coqui...")
-			print("Loading Coqui...")
 			from TTS.api import TTS as tts_api
-			loaded_tts[engine] = {}
-			loaded_tts[engine]['api'] = tts_api
-			loaded_tts[engine]['engine'] = loaded_tts[engine]['api']().to(device)
-			loaded_tts[engine]['model'] = None
-			del tts_api
-		progress(0.25,"Loaded Coqui")
-		print("Loaded Coqui")
+			if engine == "coqui_xtts":
+				progress(0.15, "Loading Coqui XTTS...")
+				print("Loading Coqui XTTS...")
+				from TTS.tts.configs.xtts_config import XttsConfig
+				from TTS.tts.models.xtts import Xtts
+				loaded_tts[engine] = {
+					'Xtts': Xtts,
+					'XttsConfig': XttsConfig,
+					'model': None,
+					'api': tts_api
+				}
+				del Xtts, XttsConfig
+				progress(0.25,"Loaded Coqui XTTS`")
+				print("Loaded Coqui XTTS")
+			else:
+				progress(0.15, "Loading Coqui...")
+				print("Loading Coqui...")
+				from TTS.api import TTS as tts_api
+				loaded_tts[engine] = {
+					'api': tts_api,
+					'engine': loaded_tts[engine]['api']().to(device),
+					'model': None
+				}
+				progress(0.25,"Loaded Coqui")
+				print("Loaded Coqui")
+		del tts_api
 
 		if loaded_tts[engine]['model'] != model:
 			progress(0.30,"Loading model...")
 			print("Loading model...")
-			if ',' in model:
-				loaded_tts[engine]['api'].tts.configs.xtts_config.X
-				tts_path = "./coqui/tts/"+model.split(",")[0]+"/"+model.split(",")[1]
-				config_path = "./coqui/tts/"+model.split(",")[0]+"/config.json"
-				loaded_tts[engine]['api'].load_tts_model_by_path(loaded_tts[engine]['engine'], tts_path, config_path)
+			if engine == "coqui_xtts":
+				tts_obj['api']().download_model_by_name(model_name=xtts_model)
+				xtts_checkpoint_dir =  os.environ["TTS_HOME"] + "tts/"+model.replace("/","--")+"/"
+				xtts_checkpoint = xtts_checkpoint_dir+"model.pth"
+				xtts_config = xtts_checkpoint_dir+"config.json"
+				xtts_vocab = xtts_checkpoint_dir+"vocab.json"
+				xtts_speaker_file = xtts_checkpoint_dir + "speakers_xtts.pth"
+				config = loaded_tts[engine]['XttsConfig']()
+				config.load_json(xtts_config)
+				loaded_tts[engine]['api'] =  loaded_tts[engine]['Xtts'].init_from_config(config)
+				mute(True)
+				loaded_tts[engine]['api'].load_checkpoint(config, checkpoint_path=xtts_checkpoint, vocab_path=xtts_vocab, use_deepspeed=advanced_opts['use_deepspeed'], speaker_file_path=xtts_speaker_file)
+				unmute()
+				if device == "cuda":
+					loaded_tts[engine]['api'].cuda()
 			else:
-				loaded_tts[engine]['api'].load_tts_model_by_name(loaded_tts[engine]['engine'], model)
+				if ',' in model:
+					loaded_tts[engine]['api'].tts.configs.xtts_config.X
+					tts_path = "./coqui/tts/"+model.split(",")[0]+"/"+model.split(",")[1]
+					config_path = "./coqui/tts/"+model.split(",")[0]+"/config.json"
+					loaded_tts[engine]['api'].load_tts_model_by_path(loaded_tts[engine]['engine'], tts_path, config_path)
+				else:
+					loaded_tts[engine]['api'].load_tts_model_by_name(loaded_tts[engine]['engine'], model)
 			loaded_tts[engine]['model'] = model
 
 		progress(0.50,"Generating...")
 		print("Generating...")
-		if loaded_tts[engine]['engine'].is_multi_speaker or loaded_tts[engine]['engine'].is_multi_lingual:
-			wavs = glob.glob(voice + "/*.wav")
-			if len(wavs) > 0:
-				if loaded_tts[engine]['engine'].is_multi_lingual:
-					# multilingual, so send language and speaker
-					if 'xtts' in model:
-						ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs, language=advanced_opts['language'], temperature=advanced_opts['temperature'], length_penalty=advanced_opts['length_penalty'], top_p=advanced_opts['top_p'], top_k=advanced_opts['top_k'], repetition_penalty=float(advanced_opts['repetition_penalty']), speed=advanced_opts['speed'])
-					else:
-						ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs, language=advanced_opts['language'])
-				else:
-					# not multilingual, just send speaker
-					ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs)
-			del wavs
+		wavs = glob.glob(voice + "/*.wav")
+		if engine == "coqui_xtts":
+			print("Computing speaker latents...")
+			gpt_cond_latent, speaker_embedding = loaded_tts[engine]['api'].get_conditioning_latents(wavs)
+			print("Generating...")
+
+			out = loaded_tts[engine]['api'].inference(
+				speaktxt,
+				advanced_opts['language'],
+				gpt_cond_latent,
+				speaker_embedding,
+				temperature=advanced_opts['temperature'],
+				enable_text_splitting=True,
+				length_penalty=advanced_opts['length_penalty'],
+				top_p=advanced_opts['top_p'],
+				top_k=advanced_opts['top_k'],
+				repetition_penalty=advanced_opts['repetition_penalty'],
+				speed=advanced_opts['speed']
+			)
+			del gpt_cond_latent, speaker_embedding
+			audio = out["wav"]
 		else:
-			# no speaker
-			ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, sample_rate=sr, channels=channels, bit_depth=bit_depth)
+			if loaded_tts[engine]['engine'].is_multi_speaker or loaded_tts[engine]['engine'].is_multi_lingual:
+				if len(wavs) > 0:
+					if loaded_tts[engine]['engine'].is_multi_lingual:
+							ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs, language=advanced_opts['language'])
+					else:
+						# not multilingual, just send speaker
+						ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, speaker_wav=wavs)
+			else:
+				# no speaker
+				ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, sample_rate=sr, channels=channels, bit_depth=bit_depth)
+		del wavs
 	elif engine == "bark":
 		if engine not in loaded_tts:
 			unload_engines(engine)
@@ -459,6 +515,7 @@ def updateModels(engine):
 		return gr.Dropdown(choices=['parler-tts/parler-tts-mini-v1', 'parler-tts/parler-tts-large-v1'], value='parler-tts/parler-tts-large-v1', label="TTS Model")
 
 def updateAdvancedVisiblity(engine):
+	updateOpts(engine)
 	if engine == "coqui":
 		return {
 			coqui_opts: gr.Group(visible=True),
@@ -494,7 +551,6 @@ def updateAdvancedVisiblity(engine):
 			mars5_opts: gr.Group(visible=False),
 			parler_opts: gr.Group(visible=False)
 		}
-	updateOpts(engine)
 
 def updateAdvancedOpts(engine, *args):
 	# wtf...
@@ -515,7 +571,7 @@ def updateAdvancedOpts(engine, *args):
 			'kv_cache': kv_cache,
 			'half': half,
 			'cond_free': cond_free,
-			'temperature': args[1],
+			'temperature': float(args[1]),
 			'diffusion_temperature': args[2],
 			'num_autoregressive_samples': args[3],
 			'diffusion_iterations': args[4]
@@ -525,7 +581,7 @@ def updateAdvancedOpts(engine, *args):
 			'transcription': args[5],
 			'deep_clone': ('deep_clone' in args[6]),
 			'use_kv_cache': ('use_kv_cache' in args[6]),
-			'temperature': args[7],
+			'temperature': float(args[7]),
 			'top_k': args[8],
 			'top_p': args[9],
 			'rep_penalty_window': args[10],
@@ -544,17 +600,18 @@ def updateAdvancedOpts(engine, *args):
 			'attn_implementation': args[16],
 			'compile_mode': 'default' if compile_mode else False,
 			'inc_attn_mask': inc_attn_mask,
-			'temperature': args[17]
+			'temperature': float(args[17])
 		}
 	elif engine == "coqui":
 		advanced_opts = {
 			'language': args[18],
-			'temperature': args[19],
-			'length_penalty': args[20],
+			'temperature': float(args[19]),
+			'length_penalty': float(args[20]),
 			'top_p': args[21],
 			'top_k': args[22],
-			'speed': args[23],
-			'repetition_penalty': args[24]
+			'speed': float(args[23]),
+			'repetition_penalty': float(args[24]),
+			'use_deepspeed': bool(args[25])
 		}
 	else:
 		advanced_opts = {}
@@ -623,6 +680,7 @@ def presetChanged(engine, model):
 				xtts_speed: gr.Slider(visible=True),
 				xtts_repetition_penalty: gr.Slider(visible=True),
 				xtts_language: gr.Dropdown(visible=True),
+				xtts_deepspeed: gr.Checkbox(visible=True),
 				coqui_opts: gr.Group(visible=True)
 			}
 		elif 'multilingual' in model:
@@ -638,6 +696,7 @@ def presetChanged(engine, model):
 				xtts_speed: gr.Slider(visible=False),
 				xtts_repetition_penalty: gr.Slider(visible=False),
 				xtts_language: gr.Dropdown(visible=True),
+				xtts_deepspeed: gr.Checkbox(visible=False),
 				coqui_opts: gr.Group(visible=True)
 			}
 		else:
@@ -653,6 +712,7 @@ def presetChanged(engine, model):
 				xtts_speed: gr.Slider(visible=False),
 				xtts_repetition_penalty: gr.Slider(visible=False),
 				xtts_language: gr.Dropdown(visible=False),
+				xtts_deepspeed: gr.Checkbox(visible=False),
 				coqui_opts: gr.Group(visible=False)
 			}
 	return {
@@ -774,11 +834,15 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 				with gr.Row():
 					gr.HTML("<p style=\"padding-left: 10px\">Coqui Advanced Options - Read the <a href='https://coqui.ai/cpml' target='_blank'>Coqui Public Model License (CPML)</a></p>")
 				with gr.Row():
-					xtts_language = gr.Dropdown(choices=["en","es","fr","de","it","pt","pl","tr","ru","nl","cs","ar","zh-cn","hu","ko","ja","hi"], value="en", label="Language")
-					xtts_licence = gr.Checkbox(label="I agree to the CPML", value=False, info="Must be checked before using XTTS models.")
+					with gr.Column():
+						xtts_language = gr.Dropdown(choices=["en","es","fr","de","it","pt","pl","tr","ru","nl","cs","ar","zh-cn","hu","ko","ja","hi"], value="en", label="Language")
+					with gr.Column():
+						with gr.Row():
+							xtts_licence = gr.Checkbox(label="I agree to the CPML", value=False, info="Must be checked before using XTTS models.", elem_classes="minheight")
+							xtts_deepspeed = gr.Checkbox(label="Use Deepspeed", value=True, info="Greatly increases inference speed.", elem_classes="minheight")
 				with gr.Row():
 					with gr.Column():
-						xtts_temperature = gr.Slider(value=0.85, minimum=0, maximum=3, label="Temperature", info="Temperature for the autoregressive model inference. Larger values makes predictions more creative sacrificing stability.")
+						xtts_temperature = gr.Slider(value=0.85, minimum=0.01, maximum=3, label="Temperature", info="Temperature for the autoregressive model inference. Larger values makes predictions more creative sacrificing stability.")
 						xtts_repetition_penalty = gr.Slider(value=2, maximum=5, minimum=0, label="Repetition Penalty", info='A penalty that prevents the autoregressive decoder from repeating itself during decoding. Can be used to reduce the incidence of long silences or "uhhhhhhs", etc.')
 						xtts_top_p = gr.Slider(value=0.85, minimum=0, maximum=3, label="top_p", info="If < 1, only the smallest set of most probable tokens with probabilities that add up to top_p or higher are kept.")
 					with gr.Column():
@@ -800,7 +864,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 				with gr.Row():
 					gr.Markdown("<p style=\"padding-left: 10px\">Camb.ai Mars5 Advanced Options</p>")
 				with gr.Row():
-					mars5_transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription 	(Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
+					mars5_transcription = gr.Textbox("", lines=4, placeholder="Type your transcription here, or provide a .txt file of the same name next to the .wav", label="Voice Cloning Transcription	 (Optional, but recommended)", info="You can place a .txt of the same name next to a .wav to autoload its transcription.")
 				with gr.Row():
 					mars5_bool = gr.CheckboxGroup([["Deep Clone (requires transcription)","deep_clone"],["Use KV Cache","use_kv_cache"]], value=['use_kv_cache'])
 					mars5_temperature = gr.Slider(value=0.7, minimum=0, maximum=3, label="Temperature", info="high temperatures (T>1) favour less probable outputs while low temperatures reduce randomness")
@@ -853,7 +917,7 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 	voices_group = {'fn': updateVoicesVisibility, 'inputs': [tts_select, model_select, voice_select], 'outputs': voice_select}
 	voiceChanged_group = {'fn': voiceChanged, 'inputs': [tts_select, voice_select], 'outputs': [mars5_transcription, mars5_bool], 'show_progress': False}
 	presetChanged_group = {'fn': presetChanged, 'inputs': [tts_select, model_select], 'outputs': [tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, tortoise_opts_comp, xtts_licence, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty, xtts_language, coqui_opts], 'show_progress': False}
-	opts_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur, parler_options, parler_description, parler_attn_implementation, parler_temperature, xtts_language, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty]}
+	opts_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur, parler_options, parler_description, parler_attn_implementation, parler_temperature, xtts_language, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty, xtts_deepspeed]}
 
 
 	log_timer.tick(fn=read_log, inputs=None, outputs=fake_console_logs)
