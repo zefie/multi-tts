@@ -6,7 +6,8 @@ print("Loading torch, torchaudio, and librosa...")
 import torch, torchaudio, librosa
 print("Loading miscellanous modules...")
 from TTS.utils.manage import ModelManager
-import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins, sys, argparse, gc, io, psutil
+import huggingface_hub as hf
+import glob, os, argparse, unicodedata, json, random, psutil, requests, re, time, builtins, sys, argparse, gc, io, psutil, shutil
 import scipy.io.wavfile as wav
 from string import ascii_letters, digits, punctuation
 
@@ -16,7 +17,7 @@ globals = ['voice']
 for f in globals:
 	loaded_tts[f] = None
 
-version = 20240822
+version = 20240823
 
 paths = [
 	'/home/app/.cache/coqui',
@@ -123,10 +124,11 @@ def unmute():
 advanced_opts={}
 
 tts_engines = [
-	['Camb.ai Mars5','mars5'],
+	['Bark','bark'],
 	['Coqui','coqui'],
+	['Mars5','mars5'],
+	['OpenVoice', 'openvoice'],
 	['Parler', 'parler'],
-	['Suno Bark','bark'],
 	['TorToiSe','tortoise']
 ]
 
@@ -139,6 +141,11 @@ tortoise_presets = {
 	'high_quality': {'label': 'High Quality', 'num_autoregressive_samples': 256, 'diffusion_iterations': 400},
 	'zefie_hq': {'label': "zefie's High Quality", "num_autoregressive_samples": 512, "diffusion_iterations": 400},
 }
+
+openvoice_supported_models = [
+	"checkpoints/base_speakers/EN",
+	"checkpoints/base_speakers/ZH",
+]
 
 # Query Coqui for it's TTS model list, mute to prevent dumping the list to console
 mute()
@@ -244,7 +251,8 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 				return sr, audio
 		sys.stdin.seek(0)
 		speaktxt = strip_unicode(speaktxt)
-		os.environ["TTS_HOME"] = "./coqui/"
+		if 'TTS_HOME' not in os.environ:
+			os.environ["TTS_HOME"] = "/home/app/.cache/coqui/"
 		if engine not in loaded_tts:
 			unload_engines(engine)
 			from TTS.api import TTS as tts_api
@@ -303,14 +311,13 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 					loaded_tts[engine]['api'].load_tts_model_by_name(loaded_tts[engine]['engine'], model)
 			loaded_tts[engine]['model'] = model
 
-		progress(0.50,"Generating...")
-		print("Generating...")
 		wavs = glob.glob(voice + "/*.wav")
 		if engine == "coqui_xtts":
+			progress(0.45,"Computing speaker latents...")
 			print("Computing speaker latents...")
 			gpt_cond_latent, speaker_embedding = loaded_tts[engine]['api'].get_conditioning_latents(wavs)
+			progress(0.50,"Generating...")
 			print("Generating...")
-
 			out = loaded_tts[engine]['api'].inference(
 				speaktxt,
 				advanced_opts['language'],
@@ -327,6 +334,8 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 			del gpt_cond_latent, speaker_embedding
 			audio = out["wav"]
 		else:
+			progress(0.50,"Generating...")
+			print("Generating...")			
 			if loaded_tts[engine]['engine'].is_multi_speaker or loaded_tts[engine]['engine'].is_multi_lingual:
 				if len(wavs) > 0:
 					if loaded_tts[engine]['engine'].is_multi_lingual:
@@ -338,6 +347,65 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 				# no speaker
 				ttsgen = loaded_tts[engine]['engine'].tts(text=speaktxt, sample_rate=sr, channels=channels, bit_depth=bit_depth)
 		del wavs
+	elif engine == "openvoice":
+		lang = model[-2:].lower()
+		if 'OPENVOICE_HOME' not in os.environ:
+			os.environ["OPENVOICE_HOME"] = "/home/app/.cache/openvoice"			
+		model_path = os.environ['OPENVOICE_HOME'];		
+		if engine not in loaded_tts:
+			unload_engines(engine)
+			progress(0.15, "Loading OpenVoice...")
+			print("Loading OpenVoice...")
+			from openvoice import se_extractor
+			from openvoice.api import BaseSpeakerTTS, ToneColorConverter
+			loaded_tts[engine] = {
+				'se_extractor': se_extractor,
+				'BaseSpeakerTTS': BaseSpeakerTTS,
+				'ToneColorConverter': ToneColorConverter,
+				'model': None
+			}
+			del se_extractor, BaseSpeakerTTS, ToneColorConverter
+			progress(0.25,"Loaded OpenVoice")
+			print("Loaded OpenVoice")			
+		if loaded_tts[engine]['model'] != model:
+			progress(0.30,"Loading model...")
+			print("Loading model...")
+			hf.snapshot_download(repo_id="myshell-ai/OpenVoice", local_dir=model_path)
+			loaded_tts[engine]['base_speaker_tts'] = loaded_tts[engine]['BaseSpeakerTTS'](f'{model_path}/{model}/config.json', device=device)
+			loaded_tts[engine]['base_speaker_tts'].load_ckpt(f'{model_path}/{model}/checkpoint.pth')
+			ckpt_converter = f'{model_path}/checkpoints/converter'
+			loaded_tts[engine]['tone_color_converter'] = loaded_tts[engine]['ToneColorConverter'](f'{ckpt_converter}/config.json', device=device)
+			loaded_tts[engine]['tone_color_converter'].load_ckpt(f'{ckpt_converter}/checkpoint.pth')			
+			loaded_tts[engine]['source_se'] = torch.load(f'{model_path}/{model}/{lang}_style_se.pth').to(device)
+			loaded_tts[engine]['model'] = model
+		progress(0.45,"Computing speaker latents...")			
+		print("Computing speaker latents...")
+		inaud, insr = torchaudio.load(voice)		
+		if insr != 16000:			
+			print("Resampling voice...")
+			wav = torchaudio.functional.resample(inaud, insr, 16000)
+			torchaudio.save('/tmp/voice.wav', wav, 16000)
+			voice = '/tmp/voice.wav'
+		target_se, audio_name = loaded_tts[engine]['se_extractor'].get_se(voice, loaded_tts[engine]['tone_color_converter'], target_dir=model_path+'/processed', vad=True)
+		output_file = "/tmp/openvoice.wav"
+		if lang == "en":
+			lang = "English"
+		elif lang == "zh":
+			lang = "Chinese"
+		progress(0.50,"Generating...")
+		print("Generating...")
+		loaded_tts[engine]['base_speaker_tts'].tts(speaktxt, voice, speaker=advanced_opts['speaker'], language=lang, speed=1.0)
+		encode_message = "@MyShell"
+		loaded_tts[engine]['tone_color_converter'].convert(
+			audio_src_path=voice, 
+			src_se=loaded_tts[engine]['source_se'], 
+			tgt_se=target_se, 
+			output_path=output_file,
+			message=encode_message)
+		audio, sr = librosa.load(output_file)
+		shutil.rmtree(model_path+'/processed')
+		os.unlink(output_file)
+
 	elif engine == "bark":
 		if engine not in loaded_tts:
 			unload_engines(engine)
@@ -476,7 +544,7 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 
 def updateVoicesVisibility(engine, model, current_voice):
 	global loaded_tts
-	if (engine == 'coqui' and 'multilingual' in model) or engine == 'tortoise' or engine == 'mars5':
+	if (engine == 'coqui' and 'multilingual' in model) or engine == 'tortoise' or engine == 'mars5' or engine == 'openvoice':
 		voices = getVoices(engine)
 		if current_voice != '':
 			loaded_tts['voice'] = current_voice
@@ -491,15 +559,17 @@ def updateVoicesVisibility(engine, model, current_voice):
 
 def updateInfo(engine):
 	if engine == "mars5":
-		return gr.CheckboxGroup(info="Mars5 prefers short (< max_prompt_dur seconds) speaker wavs.")
+		return gr.CheckboxGroup(info="Mars5 prefers short (< max_prompt_dur seconds) speaker wavs. (C) Camb.ai")
 	elif engine == "coqui":
 		return gr.CheckboxGroup(info="Coqui XTTS and Your TTS will use all wavs in a character's folder for cloning.")
 	elif engine == "parler":
 		return gr.CheckboxGroup(info="Parler uses textual descriptions to generate its voice.")
 	elif engine == "bark":
-		return gr.CheckboxGroup(info="Bark uses npz speaker models to generate its voice. You can add your own at /home/app/bark/assets/custom")
+		return gr.CheckboxGroup(info="Bark uses npz speaker models to generate its voice. You can add your own at /home/app/bark/assets/custom ~ (C) Suno, Inc")
 	elif engine == "tortoise":
 		return gr.CheckboxGroup(info="TorToiSe will use all wavs in a character's folder for cloning.")
+	elif engine == "openvoice":
+		return gr.CheckboxGroup(info="OpenVoice allows you to specify the cloned voice's tone. ~ (C) 2024 MyShell.ai")
 
 def updateModels(engine):
 	if engine == "bark":
@@ -513,12 +583,22 @@ def updateModels(engine):
 		return gr.Dropdown(choices=['Camb-ai/mars5-tts'], value='Camb-ai/mars5-tts', label="TTS Model")
 	elif engine == "parler":
 		return gr.Dropdown(choices=['parler-tts/parler-tts-mini-v1', 'parler-tts/parler-tts-large-v1'], value='parler-tts/parler-tts-large-v1', label="TTS Model")
+	elif engine == "openvoice":
+		return gr.Dropdown(choices=openvoice_supported_models, value=openvoice_supported_models[0], label="TTS Model")
 
 def updateAdvancedVisiblity(engine):
-	updateOpts(engine)
 	if engine == "coqui":
 		return {
 			coqui_opts: gr.Group(visible=True),
+			openvoice_opts: gr.Group(visible=False),
+			tortoise_opts: gr.Group(visible=False),
+			mars5_opts: gr.Group(visible=False),
+			parler_opts: gr.Group(visible=False)
+		}
+	elif engine == "openvoice":
+		return {
+			coqui_opts: gr.Group(visible=False),
+			openvoice_opts: gr.Group(visible=True),
 			tortoise_opts: gr.Group(visible=False),
 			mars5_opts: gr.Group(visible=False),
 			parler_opts: gr.Group(visible=False)
@@ -526,6 +606,7 @@ def updateAdvancedVisiblity(engine):
 	elif engine == "tortoise":
 		return {
 			coqui_opts: gr.Group(visible=False),
+			openvoice_opts: gr.Group(visible=False),
 			tortoise_opts: gr.Group(visible=True),
 			mars5_opts: gr.Group(visible=False),
 			parler_opts: gr.Group(visible=False)
@@ -533,6 +614,7 @@ def updateAdvancedVisiblity(engine):
 	elif engine == "mars5":
 		return {
 			coqui_opts: gr.Group(visible=False),
+			openvoice_opts: gr.Group(visible=False),
 			tortoise_opts: gr.Group(visible=False),
 			mars5_opts: gr.Group(visible=True),
 			parler_opts: gr.Group(visible=False)
@@ -540,6 +622,7 @@ def updateAdvancedVisiblity(engine):
 	elif engine == "parler":
 		return {
 			coqui_opts: gr.Group(visible=False),
+			openvoice_opts: gr.Group(visible=False),
 			tortoise_opts: gr.Group(visible=False),
 			mars5_opts: gr.Group(visible=False),
 			parler_opts: gr.Group(visible=True)
@@ -547,6 +630,7 @@ def updateAdvancedVisiblity(engine):
 	else:
 		return {
 			coqui_opts: gr.Group(visible=False),
+			openvoice_opts: gr.Group(visible=False),
 			tortoise_opts: gr.Group(visible=False),
 			mars5_opts: gr.Group(visible=False),
 			parler_opts: gr.Group(visible=False)
@@ -612,6 +696,10 @@ def updateAdvancedOpts(engine, *args):
 			'speed': float(args[23]),
 			'repetition_penalty': float(args[24]),
 			'use_deepspeed': bool(args[25])
+		}
+	elif engine == "openvoice":
+		advanced_opts = {
+			'speaker': args[26]
 		}
 	else:
 		advanced_opts = {}
@@ -777,7 +865,7 @@ def updateSysInfo():
 
 with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_style) as demo:
 	def getVoices(engine):
-		if engine == "mars5":
+		if engine == "mars5" or engine == "openvoice":
 			# Scan samples and srcwavs, and return each wav individually
 			wavs = [[item.replace('./sample/',''),item] for item in sorted(glob.glob('./sample/**/*.wav', recursive=True))]
 			wavs.extend([[item.replace('./srcwav/',''),item] for item in sorted(glob.glob('./srcwav/**/*.wav', recursive=True))])
@@ -849,6 +937,9 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 						xtts_speed = gr.Slider(value=1, minimum=0.1, maximum=3, label="Speed", info="The speed rate of the generated audio. (can produce artifacts if far from 1.0)")
 						xtts_length_penalty = gr.Slider(value=1, minimum=-1, maximum=1, label="Length Penalty", info="Exponential penalty to the length that is used with beam-based generation. length_penalty > 0.0 promotes longer sequences, while length_penalty < 0.0 encourages shorter sequences.")
 						xtts_top_k = gr.Slider(value=50, minimum=0, maximum=100, label="top_k", info="Lower values mean the decoder produces more \"likely\" (aka boring) outputs.")
+			with gr.Group(visible=False) as openvoice_opts:
+				with gr.Row():
+					openvoice_speaker = gr.Dropdown(choices=["default", "whispering", "shouting", "excited", "cheerful", "terrified", "angry", "sad", "friendly"], value="default", label="Speaker Tone", info="The tone the TTS should apply to the text")
 			with gr.Group(visible=False) as tortoise_opts:
 				with gr.Row():
 					gr.Markdown("<p style=\"padding-left: 10px\">Tortoise Advanced Options</p>")
@@ -913,12 +1004,11 @@ with gr.Blocks(title="zefie's Multi-TTS v"+str(version), theme=theme, css=css_st
 				clear_button = gr.Button("Clear Log")
 				clear_button.click(clear_log)
 
-	groups_group = {'fn': updateAdvancedVisiblity, 'inputs': tts_select, "outputs": [coqui_opts, tortoise_opts, mars5_opts, parler_opts]}
+	groups_group = {'fn': updateAdvancedVisiblity, 'inputs': tts_select, "outputs": [coqui_opts, openvoice_opts, tortoise_opts, mars5_opts, parler_opts]}
 	voices_group = {'fn': updateVoicesVisibility, 'inputs': [tts_select, model_select, voice_select], 'outputs': voice_select}
 	voiceChanged_group = {'fn': voiceChanged, 'inputs': [tts_select, voice_select], 'outputs': [mars5_transcription, mars5_bool], 'show_progress': False}
 	presetChanged_group = {'fn': presetChanged, 'inputs': [tts_select, model_select], 'outputs': [tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, tortoise_opts_comp, xtts_licence, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty, xtts_language, coqui_opts], 'show_progress': False}
-	opts_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur, parler_options, parler_description, parler_attn_implementation, parler_temperature, xtts_language, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty, xtts_deepspeed]}
-
+	opts_group = {'fn': updateAdvancedOpts, 'inputs': [tts_select, tortoise_opts_comp, tortoise_temperature, tortoise_diffusion_temperature, tortoise_num_autoregressive_samples, tortoise_diffusion_iterations, mars5_transcription, mars5_bool, mars5_temperature, mars5_top_k, mars5_top_p, mars5_rep_penalty_window, mars5_freq_penalty, mars5_presence_penalty, mars5_max_prompt_dur, parler_options, parler_description, parler_attn_implementation, parler_temperature, xtts_language, xtts_temperature, xtts_length_penalty, xtts_top_p, xtts_top_k, xtts_speed, xtts_repetition_penalty, xtts_deepspeed, openvoice_speaker]}
 
 	log_timer.tick(fn=read_log, inputs=None, outputs=fake_console_logs)
 	tab_logs.select(fn=read_log, inputs=None, outputs=fake_console_logs)
