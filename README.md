@@ -1,7 +1,7 @@
 # zefie's Multi-TTS Docker
 
 Currently includes 
-[Camb.ai Mars5](https://github.com/Camb-ai/MARS5-TTS/), [Coqui](https://github.com/coqui-ai/TTS), [Parler](https://github.com/huggingface/parler-tts), [Suno Bark](https://github.com/suno-ai/bark), and [TorToiSe](https://github.com/neonbjb/tortoise-tts).
+[Camb.ai Mars5](https://github.com/Camb-ai/MARS5-TTS/), [Coqui](https://github.com/coqui-ai/TTS), [MyShell.ai OpenVoice](https://github.com/myshell-ai/OpenVoice/), [Parler](https://github.com/huggingface/parler-tts), [Suno Bark](https://github.com/suno-ai/bark), and [TorToiSe](https://github.com/neonbjb/tortoise-tts).
 
 ## Usage:
 
