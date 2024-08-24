@@ -380,12 +380,12 @@ def generate_tts(engine, model, voice, speaktxt, progress=gr.Progress()):
 			loaded_tts[engine]['model'] = model
 		progress(0.45,"Computing speaker latents...")			
 		print("Computing speaker latents...")
-		inaud, insr = torchaudio.load(voice)		
-		if insr != 16000:			
+		wav, insr = torchaudio.load(voice)
+		if insr != 16000:
 			print("Resampling voice...")
-			wav = torchaudio.functional.resample(inaud, insr, 16000)
-			torchaudio.save('/tmp/voice.wav', wav, 16000)
-			voice = '/tmp/voice.wav'
+			wav = torchaudio.functional.resample(wav, insr, 16000)
+		torchaudio.save('/tmp/voice.wav', wav, 16000)
+		voice = '/tmp/voice.wav'
 		target_se, audio_name = loaded_tts[engine]['se_extractor'].get_se(voice, loaded_tts[engine]['tone_color_converter'], target_dir=model_path+'/processed', vad=True)
 		output_file = "/tmp/openvoice.wav"
 		if lang == "en":
