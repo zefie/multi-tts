@@ -22,6 +22,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install librosa torchaudio vocos encodec safetensors regex
 
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install git+https://github.com/myshell-ai/MeloTTS.git unidic mecab-python3
+
+RUN python -m unidic download
+
 RUN mkdir -p /home/app
 
 RUN mkdir -p /home/app/coqui && \
@@ -34,9 +39,13 @@ COPY ./data/parler-tts /home/app/parler-tts
 COPY ./data/OpenVoice /home/app/OpenVoice
 
 RUN --mount=type=cache,target=/root/.cache/pip cd /home/app && \
-	pip install ./OpenVoice ./tortoise-tts ./parler-tts nvidia-ml-py3
+    pip install ./OpenVoice ./tortoise-tts ./parler-tts nvidia-ml-py3
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade protobuf
 
 RUN groupadd app && useradd -d /home/app -g app -G users app && chown app:app -R /home/app
+
 
 COPY --chown=app:app ./data /home/app
 
